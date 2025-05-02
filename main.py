@@ -41,9 +41,10 @@ class App:
         
         # Configure main frame grid
         self.main_frame.columnconfigure(0, weight=1)
+        self.main_frame.columnconfigure(1, weight=1)
         for i in range(6):
             self.main_frame.rowconfigure(i, weight=0)
-        self.main_frame.rowconfigure(5, weight=1)
+        self.main_frame.rowconfigure(6, weight=1)
         
         # --- Webcam and Image Used side by side ---
         # Titles
@@ -92,9 +93,13 @@ class App:
         self.output_label = ttk.Label(self.main_frame, text="Response:")
         self.output_label.grid(row=5, column=0, sticky=tk.W, pady=(10, 5))
         
+        # Add Speak button (keep fixed)
+        self.speak_button = ttk.Button(self.main_frame, text="🔊 Speak", command=self.speak_response)
+        self.speak_button.grid(row=5, column=1, sticky=tk.E, padx=(5, 0), pady=(10, 5))
+        
         # Add text output display (scrolled text widget)
         self.text_output = scrolledtext.ScrolledText(self.main_frame, width=60, height=15, wrap=tk.WORD)
-        self.text_output.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        self.text_output.grid(row=6, column=0, columnspan=2, sticky="nsew", pady=(0, 10))
 
         # Variables to store the selected image
         self.image_path = None
@@ -110,9 +115,6 @@ class App:
         self.tts_model = load_silero_tts()
         self.tts_sample_rate = 48000
         self.tts_speaker = 'en_0'
-        # Add Speak button
-        self.speak_button = ttk.Button(self.main_frame, text="🔊 Speak", command=self.speak_response)
-        self.speak_button.grid(row=5, column=1, sticky=tk.E, padx=(5, 0), pady=(10, 5))
 
     def select_image(self):
         """Open file dialog to select an image"""
@@ -278,7 +280,7 @@ def main():
     root_window.title("LLAVA Model Test")
     
     # Set window geometry
-    root_window.geometry("600x750")
+    root_window.geometry("600x800")
     
     # Make window resizable - explicitly set both dimensions
     root_window.resizable(width=True, height=True)
