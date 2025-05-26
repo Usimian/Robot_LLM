@@ -21,7 +21,6 @@ def load_silero_tts():
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("LLAVA Model Test")
         
         # Configure root window to use grid
         self.root.grid_rowconfigure(0, weight=1)
@@ -31,6 +30,8 @@ class App:
         self.api_url = "http://localhost:11434/api/generate"
         self.model = "Gemma3"
         
+        self.root.title(f"{self.model} - Model Test") # Update title with model name  self.model)
+
         # Create the main frame
         self.main_frame = ttk.Frame(self.root, padding="10")
         self.main_frame.grid(row=0, column=0, sticky="nsew")
@@ -90,7 +91,7 @@ class App:
         self.submit_button.grid(row=4, column=1, padx=(5, 0), pady=(0, 10), sticky=tk.E)
         
         # Add output display label
-        self.output_label = ttk.Label(self.main_frame, text="Response:")
+        self.output_label = ttk.Label(self.main_frame, text=f"Response [{self.model}]:")
         self.output_label.grid(row=5, column=0, sticky=tk.W, pady=(10, 5))
         
         # Add Speak button (keep fixed)
@@ -277,16 +278,16 @@ def main():
     root_window = tk.Tk()
     
     # Set window title
-    root_window.title("LLAVA Model Test")
+    root_window.title("Model Test")
     
     # Set window geometry
-    root_window.geometry("600x800")
+    root_window.geometry("900x800")
     
     # Make window resizable - explicitly set both dimensions
     root_window.resizable(width=True, height=True)
     
     # Set minimum window size
-    root_window.minsize(400, 400)
+    root_window.minsize(850, 800)
     
     # Force update of window manager hints
     root_window.update_idletasks()
