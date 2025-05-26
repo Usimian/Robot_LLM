@@ -7,16 +7,23 @@ import cv2
 import numpy as np
 import torch
 import sounddevice as sd
+import threading
+import io
+# import time
 
 # Add Silero TTS model loading (initialize once)
 def load_silero_tts():
-    model, example_text = torch.hub.load(
-        repo_or_dir='snakers4/silero-models',
-        model='silero_tts',
-        language='en',
-        speaker='v3_en'
-    )
-    return model
+    try:
+        model, example_text = torch.hub.load(
+            repo_or_dir='snakers4/silero-models',
+            model='silero_tts',
+            language='en',
+            speaker='v3_en'
+        )
+        return model
+    except Exception as e:
+        print(f"Warning: Failed to load TTS model: {e}")
+        return None
 
 class App:
     def __init__(self, root):
@@ -30,7 +37,7 @@ class App:
         self.api_url = "http://localhost:11434/api/generate"
         self.model = "Gemma3"
         
-        self.root.title(f"{self.model} - Model Test") # Update title with model name  self.model)
+        self.root.title(f"{self.model} - Model Test")
 
         # Create the main frame
         self.main_frame = ttk.Frame(self.root, padding="10")
@@ -105,17 +112,31 @@ class App:
         # Variables to store the selected image
         self.image_path = None
         self.image_data = None  # Ensure image_data is always defined
+        self.photo = None  # Keep reference to prevent garbage collection
         self.text_input.focus_set()
 
         # Start webcam preview
         self.webcam_cap = None
         self.webcam_preview_running = True
+        self.webcam_preview_imgtk = None  # Keep reference to prevent garbage collection
         self.start_webcam_preview()
 
-        # Load Silero TTS model
-        self.tts_model = load_silero_tts()
+        # Load Silero TTS model (lazy loading)
+        self.tts_model = None
         self.tts_sample_rate = 48000
         self.tts_speaker = 'en_0'
+        self.tts_loading = False
+
+    def _load_tts_model_if_needed(self):
+        """Lazy load TTS model when first needed"""
+        if self.tts_model is None and not self.tts_loading:
+            self.tts_loading = True
+            try:
+                self.tts_model = load_silero_tts()
+            except Exception as e:
+                self.text_output.insert(tk.END, f"\nTTS model loading failed: {e}\n")
+            finally:
+                self.tts_loading = False
 
     def select_image(self):
         """Open file dialog to select an image"""
@@ -129,21 +150,27 @@ class App:
             # Load and display preview
             try:
                 img = Image.open(file_path)
-                img = img.resize((150, 150), Image.LANCZOS)  # Create larger thumbnail
-                self.photo = ImageTk.PhotoImage(img)
+                # Limit image size to prevent memory issues
+                img.thumbnail((800, 800), Image.LANCZOS)
+                img_thumbnail = img.resize((150, 150), Image.LANCZOS)
+                self.photo = ImageTk.PhotoImage(img_thumbnail)
                 self.image_preview.config(image=self.photo, text="")
                 
                 # Convert image to base64
-                with open(file_path, "rb") as img_file:
-                    self.image_data = base64.b64encode(img_file.read()).decode('utf-8')
+                buffer = io.BytesIO()
+                img.save(buffer, format="JPEG", quality=85)
+                img_bytes = buffer.getvalue()
+                self.image_data = base64.b64encode(img_bytes).decode('utf-8')
                     
             except Exception as e:
                 self.text_output.insert(tk.END, f"Error loading image: {str(e)}\n")
                 self.image_preview.config(text="Error loading image")
                 self.image_data = None
+                self.photo = None
         else:
             self.image_data = None
             self.image_preview.config(image='', text="No image selected")
+            self.photo = None
 
     def capture_webcam_image(self):
         """Capture an image from the webcam and use it as the selected image"""
@@ -162,9 +189,8 @@ class App:
             self.photo = ImageTk.PhotoImage(img_thumbnail)
             self.image_preview.config(image=self.photo, text="")
             # Encode as JPEG in memory
-            import io
             buffer = io.BytesIO()
-            img.save(buffer, format="JPEG")
+            img.save(buffer, format="JPEG", quality=85)
             img_bytes = buffer.getvalue()
             self.image_data = base64.b64encode(img_bytes).decode('utf-8')
             self.image_path = None  # No file path for webcam image
@@ -172,6 +198,7 @@ class App:
             self.text_output.insert(tk.END, f"Error capturing webcam image: {str(e)}\n")
             self.image_preview.config(text="Error capturing image")
             self.image_data = None
+            self.photo = None
 
     def process_query(self):
         """Process the query with Ollama Llava model"""
@@ -182,10 +209,15 @@ class App:
             else:
                 # Do nothing if no prompt and no image
                 return
+        
+        # Disable submit button to prevent multiple requests
+        self.submit_button.config(state="disabled")
+        
         # Show 'Thinking...' immediately
         self.text_output.delete(1.0, tk.END)
         self.text_output.insert(tk.END, "Thinking...\n")
-        import threading
+        
+        # Start request in separate thread
         threading.Thread(target=self.send_request, args=(prompt,), daemon=True).start()
     
     def send_request(self, prompt):
@@ -199,27 +231,32 @@ class App:
             }
             
             # Add image to payload if available and not empty
-            if self.image_data:
-                if self.image_data.strip() != "":
-                    payload["images"] = [self.image_data]
-            # If no image, do not include 'images' key (already handled by above)
+            if self.image_data and self.image_data.strip():
+                payload["images"] = [self.image_data]
             
-            # Send the request
-            response = requests.post(self.api_url, json=payload)
+            # Send the request with timeout
+            response = requests.post(self.api_url, json=payload, timeout=60)
             
             if response.status_code == 200:
                 result = response.json()
-                self.root.after(0, self.update_output, result.get("response", "No response"))
+                response_text = result.get("response", "No response")
+                self.root.after(0, self.update_output, response_text)
             else:
                 error_msg = f"Error: {response.status_code} - {response.text}"
                 self.root.after(0, self.update_output, error_msg)
                 
+        except requests.exceptions.Timeout:
+            error_msg = "Error: Request timed out"
+            self.root.after(0, self.update_output, error_msg)
+        except requests.exceptions.ConnectionError:
+            error_msg = "Error: Could not connect to Ollama server"
+            self.root.after(0, self.update_output, error_msg)
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             self.root.after(0, self.update_output, error_msg)
-        
-        # Re-enable the submit button
-        self.root.after(0, lambda: self.submit_button.config(state="normal"))
+        finally:
+            # Re-enable the submit button
+            self.root.after(0, lambda: self.submit_button.config(state="normal"))
     
     def update_output(self, text):
         """Update the output text widget with the response"""
@@ -230,6 +267,10 @@ class App:
         try:
             if self.webcam_cap is None:
                 self.webcam_cap = cv2.VideoCapture(0)
+                # Set lower resolution for better performance
+                self.webcam_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                self.webcam_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                
             ret, frame = self.webcam_cap.read()
             if ret:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -241,8 +282,10 @@ class App:
                 self.webcam_preview_label.config(text="Webcam not available")
         except Exception as e:
             self.webcam_preview_label.config(text=f"Webcam error: {e}")
+        
         if self.webcam_preview_running:
-            self.root.after(30, self.start_webcam_preview)
+            # Reduced frequency from 30ms to 100ms for better performance
+            self.root.after(100, self.start_webcam_preview)
 
     def stop_webcam_preview(self):
         self.webcam_preview_running = False
@@ -254,23 +297,59 @@ class App:
         """Clear the image being used and reset preview and data"""
         self.image_path = None
         self.image_data = None
+        self.photo = None
         self.image_preview.config(image='', text="No image selected")
 
     def speak_response(self):
         """Speak the response text using Silero TTS"""
         text = self.text_output.get(1.0, tk.END).strip()
-        if not text:
+        if not text or text == "Thinking...":
             return
+            
+        # Load TTS model if needed
+        self._load_tts_model_if_needed()
+        
+        if self.tts_model is None:
+            self.text_output.insert(tk.END, f"\nTTS not available\n")
+            return
+            
         try:
+            # Disable speak button during TTS
+            self.speak_button.config(state="disabled")
+            
             audio = self.tts_model.apply_tts(
                 text=text,
                 speaker=self.tts_speaker,
                 sample_rate=self.tts_sample_rate
             )
-            audio_np = np.array(audio)
+            # Fix NumPy 2.0+ compatibility issue
+            if hasattr(audio, 'detach'):
+                # PyTorch tensor - convert properly
+                audio_np = audio.detach().cpu().numpy()
+            else:
+                # Already a numpy array or other format
+                audio_np = np.asarray(audio)
+            
             sd.play(audio_np, self.tts_sample_rate)
+            
+            # Re-enable button after a short delay
+            self.root.after(1000, lambda: self.speak_button.config(state="normal"))
+            
         except Exception as e:
             self.text_output.insert(tk.END, f"\nTTS error: {e}\n")
+            self.speak_button.config(state="normal")
+
+    def cleanup(self):
+        """Clean up resources before closing"""
+        self.stop_webcam_preview()
+        # Clear image references
+        self.photo = None
+        self.webcam_preview_imgtk = None
+        # Stop any ongoing audio
+        try:
+            sd.stop()
+        except:
+            pass
 
 def main():
     """Main entry point for the application"""
@@ -295,11 +374,19 @@ def main():
     # Create the app
     app = App(root_window)
     
+    # Handle window close event
+    def on_closing():
+        app.cleanup()
+        root_window.destroy()
+    
+    root_window.protocol("WM_DELETE_WINDOW", on_closing)
+    
     # Start the main loop
     try:
         root_window.mainloop()
-    finally:
-        app.stop_webcam_preview()
+    except KeyboardInterrupt:
+        print("\nExiting on Ctrl-C (KeyboardInterrupt)")
+        app.cleanup()
 
 if __name__ == "__main__":
     try:
