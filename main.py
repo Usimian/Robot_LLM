@@ -14,7 +14,7 @@ import io
 # Add Silero TTS model loading (initialize once)
 def load_silero_tts():
     try:
-        model, example_text = torch.hub.load(
+        model = torch.hub.load(
             repo_or_dir='snakers4/silero-models',
             model='silero_tts',
             language='en',
@@ -35,7 +35,9 @@ class App:
         
         # API configuration
         self.api_url = "http://localhost:11434/api/generate"
+        self.api_base = "http://localhost:11434"
         self.model = "Gemma3"
+        self.available_models = []
         
         self.root.title(f"{self.model} - Model Test")
 
@@ -50,9 +52,9 @@ class App:
         # Configure main frame grid
         self.main_frame.columnconfigure(0, weight=1)
         self.main_frame.columnconfigure(1, weight=1)
-        for i in range(6):
+        for i in range(7):
             self.main_frame.rowconfigure(i, weight=0)
-        self.main_frame.rowconfigure(6, weight=1)
+        self.main_frame.rowconfigure(7, weight=1)
         
         # --- Webcam and Image Used side by side ---
         # Titles
@@ -74,45 +76,61 @@ class App:
         self.image_group.grid(row=2, column=1, sticky="s", padx=(10, 0), pady=(0, 10))
         self.image_group.columnconfigure(0, weight=1)
         self.image_group.columnconfigure(1, weight=1)
+        self.image_group.columnconfigure(2, weight=0)  # For rotate button
+        
         self.image_button = ttk.Button(self.image_group, text="Open Image...", command=self.select_image)
-        self.image_button.grid(row=0, column=0, padx=(0, 10), sticky="ew")
+        self.image_button.grid(row=0, column=0, padx=(0, 5), sticky="ew")
         self.webcam_button = ttk.Button(self.image_group, text="Take Photo", command=self.capture_webcam_image)
-        self.webcam_button.grid(row=0, column=1, padx=(10, 0), sticky="ew")
-        # Add Clear Image button under Take Photo
+        self.webcam_button.grid(row=0, column=1, padx=(5, 5), sticky="ew")
+        # Add small rotate button next to Take Photo
+        self.rotate_button = ttk.Button(self.image_group, text="↻", command=self.rotate_image, width=3)
+        self.rotate_button.grid(row=0, column=2, padx=(5, 0), sticky="e")
+        
+        # Add Clear Image button under all buttons
         self.clear_image_button = ttk.Button(self.image_group, text="Clear Image", command=self.clear_image)
-        self.clear_image_button.grid(row=1, column=0, columnspan=2, pady=(5, 0), sticky="ew")
+        self.clear_image_button.grid(row=1, column=0, columnspan=3, pady=(5, 0), sticky="ew")
+        
+        # --- Model Selection ---
+        self.model_label = ttk.Label(self.main_frame, text="Model:", font=("TkDefaultFont", 10, "bold"))
+        self.model_label.grid(row=3, column=0, sticky=tk.W, pady=(10, 5))
+        
+        self.model_var = tk.StringVar(value=self.model)
+        self.model_combo = ttk.Combobox(self.main_frame, textvariable=self.model_var, state="readonly", width=30)
+        self.model_combo.grid(row=3, column=1, sticky="ew", padx=(5, 0), pady=(10, 5))
+        self.model_combo.bind("<<ComboboxSelected>>", self.on_model_changed)
         
         # Add a simple label
         self.label = ttk.Label(self.main_frame, text="Enter your prompt:", font=("TkDefaultFont", 10, "bold"))
-        self.label.grid(row=3, column=0, sticky=tk.W, pady=(0, 5))
+        self.label.grid(row=4, column=0, sticky=tk.W, pady=(0, 5))
         
         # Add text input box
         self.text_input = ttk.Entry(self.main_frame, width=50)
         self.text_input.insert(0, "Describe image")
-        self.text_input.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        self.text_input.grid(row=5, column=0, sticky="we", pady=(0, 10))
         # Bind Enter key to submit
         self.text_input.bind("<Return>", lambda event: self.process_query())
         
         # Add submit button
         self.submit_button = ttk.Button(self.main_frame, text="Submit", command=self.process_query)
-        self.submit_button.grid(row=4, column=1, padx=(5, 0), pady=(0, 10), sticky=tk.E)
+        self.submit_button.grid(row=5, column=1, padx=(5, 0), pady=(0, 10), sticky=tk.E)
         
         # Add output display label
         self.output_label = ttk.Label(self.main_frame, text=f"Response [{self.model}]:")
-        self.output_label.grid(row=5, column=0, sticky=tk.W, pady=(10, 5))
+        self.output_label.grid(row=6, column=0, sticky=tk.W, pady=(10, 5))
         
         # Add Speak button (keep fixed)
         self.speak_button = ttk.Button(self.main_frame, text="🔊 Speak", command=self.speak_response)
-        self.speak_button.grid(row=5, column=1, sticky=tk.E, padx=(5, 0), pady=(10, 5))
+        self.speak_button.grid(row=6, column=1, sticky=tk.E, padx=(5, 0), pady=(10, 5))
         
         # Add text output display (scrolled text widget)
         self.text_output = scrolledtext.ScrolledText(self.main_frame, width=60, height=15, wrap=tk.WORD)
-        self.text_output.grid(row=6, column=0, columnspan=2, sticky="nsew", pady=(0, 10))
+        self.text_output.grid(row=7, column=0, columnspan=2, sticky="nsew", pady=(0, 10))
 
         # Variables to store the selected image
         self.image_path = None
         self.image_data = None  # Ensure image_data is always defined
         self.photo = None  # Keep reference to prevent garbage collection
+        self.current_image = None  # Store PIL Image for rotation
         self.text_input.focus_set()
 
         # Start webcam preview
@@ -126,6 +144,9 @@ class App:
         self.tts_sample_rate = 48000
         self.tts_speaker = 'en_0'
         self.tts_loading = False
+        
+        # Load available models from Ollama
+        self.load_models()
 
     def _load_tts_model_if_needed(self):
         """Lazy load TTS model when first needed"""
@@ -137,6 +158,51 @@ class App:
                 self.text_output.insert(tk.END, f"\nTTS model loading failed: {e}\n")
             finally:
                 self.tts_loading = False
+
+    def load_models(self):
+        """Load available models from Ollama server"""
+        def fetch_models():
+            try:
+                response = requests.get(f"{self.api_base}/api/tags", timeout=10)
+                if response.status_code == 200:
+                    models_data = response.json()
+                    models = [model['name'] for model in models_data.get('models', [])]
+                    self.root.after(0, self.update_model_list, models)
+                else:
+                    self.root.after(0, self.update_model_list, [])
+            except Exception as e:
+                print(f"Failed to fetch models: {e}")
+                self.root.after(0, self.update_model_list, [])
+        
+        # Fetch models in background thread
+        threading.Thread(target=fetch_models, daemon=True).start()
+
+    def update_model_list(self, models):
+        """Update the model dropdown with available models"""
+        self.available_models = models
+        if models:
+            self.model_combo['values'] = models
+            # If current model is not in the list, set to first available
+            if self.model not in models and models:
+                self.model = models[0]
+                self.model_var.set(self.model)
+                self.update_window_title()
+        else:
+            # If no models found, keep current model but show message
+            self.model_combo['values'] = [self.model]
+            print("No models found from Ollama server, using current model")
+
+    def on_model_changed(self, event=None):
+        """Handle model selection change"""
+        selected_model = self.model_var.get()
+        if selected_model and selected_model != self.model:
+            self.model = selected_model
+            self.update_window_title()
+            self.output_label.config(text=f"Response [{self.model}]:")
+
+    def update_window_title(self):
+        """Update window title with current model"""
+        self.root.title(f"{self.model} - Model Test")
 
     def select_image(self):
         """Open file dialog to select an image"""
@@ -151,8 +217,12 @@ class App:
             try:
                 img = Image.open(file_path)
                 # Limit image size to prevent memory issues
-                img.thumbnail((800, 800), Image.LANCZOS)
-                img_thumbnail = img.resize((150, 150), Image.LANCZOS)
+                img.thumbnail((800, 800), Image.Resampling.LANCZOS)
+                
+                # Store the current image for rotation
+                self.current_image = img.copy()
+                
+                img_thumbnail = img.resize((150, 150), Image.Resampling.LANCZOS)
                 self.photo = ImageTk.PhotoImage(img_thumbnail)
                 self.image_preview.config(image=self.photo, text="")
                 
@@ -167,10 +237,12 @@ class App:
                 self.image_preview.config(text="Error loading image")
                 self.image_data = None
                 self.photo = None
+                self.current_image = None
         else:
             self.image_data = None
             self.image_preview.config(image='', text="No image selected")
             self.photo = None
+            self.current_image = None
 
     def capture_webcam_image(self):
         """Capture an image from the webcam and use it as the selected image"""
@@ -185,7 +257,11 @@ class App:
             # Convert BGR to RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(frame_rgb)
-            img_thumbnail = img.resize((150, 150), Image.LANCZOS)
+            
+            # Store the current image for rotation
+            self.current_image = img.copy()
+            
+            img_thumbnail = img.resize((150, 150), Image.Resampling.LANCZOS)
             self.photo = ImageTk.PhotoImage(img_thumbnail)
             self.image_preview.config(image=self.photo, text="")
             # Encode as JPEG in memory
@@ -199,6 +275,7 @@ class App:
             self.image_preview.config(text="Error capturing image")
             self.image_data = None
             self.photo = None
+            self.current_image = None
 
     def process_query(self):
         """Process the query with Ollama Llava model"""
@@ -275,7 +352,7 @@ class App:
             if ret:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(frame_rgb)
-                img = img.resize((320, 240), Image.LANCZOS)
+                img = img.resize((320, 240), Image.Resampling.LANCZOS)
                 self.webcam_preview_imgtk = ImageTk.PhotoImage(img)
                 self.webcam_preview_label.config(image=self.webcam_preview_imgtk, text="")
             else:
@@ -298,7 +375,31 @@ class App:
         self.image_path = None
         self.image_data = None
         self.photo = None
+        self.current_image = None
         self.image_preview.config(image='', text="No image selected")
+
+    def rotate_image(self):
+        """Rotate the current image by 90 degrees clockwise"""
+        if self.current_image is None:
+            return
+        
+        try:
+            # Rotate the image 90 degrees clockwise
+            self.current_image = self.current_image.rotate(-90, expand=True)
+            
+            # Update the preview
+            img_thumbnail = self.current_image.resize((150, 150), Image.Resampling.LANCZOS)
+            self.photo = ImageTk.PhotoImage(img_thumbnail)
+            self.image_preview.config(image=self.photo, text="")
+            
+            # Update the base64 data
+            buffer = io.BytesIO()
+            self.current_image.save(buffer, format="JPEG", quality=85)
+            img_bytes = buffer.getvalue()
+            self.image_data = base64.b64encode(img_bytes).decode('utf-8')
+            
+        except Exception as e:
+            self.text_output.insert(tk.END, f"Error rotating image: {str(e)}\n")
 
     def speak_response(self):
         """Speak the response text using Silero TTS"""
@@ -317,7 +418,7 @@ class App:
             # Disable speak button during TTS
             self.speak_button.config(state="disabled")
             
-            audio = self.tts_model.apply_tts(
+            audio = self.tts_model.apply_tts(  # type: ignore
                 text=text,
                 speaker=self.tts_speaker,
                 sample_rate=self.tts_sample_rate
