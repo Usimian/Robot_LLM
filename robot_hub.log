@@ -1,0 +1,52 @@
+2025-08-03 09:17:54,826 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-03 09:17:54,826 - VILARobotHub - INFO - Created default config file: robot_hub_config.ini
+2025-08-03 09:17:54,826 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-03 09:17:54,826 - VILARobotHub - INFO - 🚀 Loading VILA model for robot service...
+2025-08-03 09:17:59,079 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-03 09:18:08,775 - VILARobotHub - INFO - ✅ VILA model ready for robot requests
+2025-08-03 09:18:08,776 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-03 09:18:08,776 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-03 09:18:08,776 - VILARobotHub - INFO - 🔌 TCP server listening on port 9999
+2025-08-03 09:18:08,776 - VILARobotHub - INFO - 🌐 TCP server listening on port 9999
+2025-08-03 09:18:08,776 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-03 09:18:51,379 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-03 09:18:51,380 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-03 09:18:51,380 - VILARobotHub - INFO - 🚀 Loading VILA model for robot service...
+2025-08-03 09:18:54,274 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-03 09:18:58,455 - VILARobotHub - INFO - ✅ VILA model ready for robot requests
+2025-08-03 09:18:58,455 - VILARobotHub - INFO - 🌐 TCP server listening on port 9999
+2025-08-03 09:18:58,455 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-03 09:18:58,455 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-03 09:18:58,455 - VILARobotHub - INFO - 🔌 TCP server listening on port 9999
+2025-08-03 09:18:58,455 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-03 09:19:22,470 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-03 09:19:22,470 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-03 09:19:22,470 - VILARobotHub - INFO - 🚀 Loading VILA model for robot service...
+2025-08-03 09:19:25,464 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-03 09:19:29,919 - VILARobotHub - INFO - ✅ VILA model ready for robot requests
+2025-08-03 09:19:29,920 - VILARobotHub - INFO - 🌐 TCP server listening on port 9999
+2025-08-03 09:19:29,920 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-03 09:19:29,920 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-03 09:19:29,920 - VILARobotHub - INFO - 🔌 TCP server listening on port 9999
+2025-08-03 09:19:29,920 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-03 09:20:07,756 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-03 09:20:07,757 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-03 09:20:07,757 - VILARobotHub - INFO - 🚀 Loading VILA model for robot service...
+2025-08-03 09:20:10,646 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-03 09:20:14,825 - VILARobotHub - INFO - ✅ VILA model ready for robot requests
+2025-08-03 09:20:14,825 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-03 09:20:14,825 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-03 09:20:14,826 - VILARobotHub - INFO - 🔌 TCP server listening on port 9999
+2025-08-03 09:20:14,826 - VILARobotHub - INFO - 🌐 TCP server listening on port 9999
+2025-08-03 09:20:14,826 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-03 09:20:53,278 - VILARobotHub - INFO - Robot test_robot_01 registered successfully
+2025-08-03 09:20:56,154 - VILARobotHub - INFO - Command sent to robot test_robot_01: stop
+2025-08-03 09:21:14,116 - VILARobotHub - INFO - TCP connection from ('127.0.0.1', 43446)
+2025-08-03 09:21:14,117 - VILARobotHub - INFO - Robot tcp_robot_01 registered successfully
+2025-08-03 09:21:15,977 - VILARobotHub - INFO - TCP connection closed: ('127.0.0.1', 43446)
+2025-08-03 09:21:30,330 - VILARobotHub - INFO - WebSocket client connected
+2025-08-03 09:21:31,375 - VILARobotHub - INFO - Robot ws_robot_01 registered successfully
+2025-08-03 12:13:18,066 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-03 12:13:18,066 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-03 12:13:18,066 - VILARobotHub - INFO - 🚀 Loading VILA model for robot service...
+2025-08-03 12:13:19,478 - VILARobotHub - ERROR - ❌ Failed to initialize VILA model
