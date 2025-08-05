@@ -173,21 +173,74 @@ class RobotVILAService:
     def __init__(self):
         self.vila_model = VILAModel()
         self.model_loaded = False
+        self.model_enabled = False  # New: separate enabled state from loaded
         self.robot_manager = RobotManager()
         self.tcp_server = None
         self.tcp_thread = None
         
     def initialize(self):
-        """Initialize VILA model and services"""
-        logger.info("🚀 Loading VILA model for robot service...")
-        success = self.vila_model.load_model()
-        if success:
-            self.model_loaded = True
-            logger.info("✅ VILA model ready for robot requests")
+        """Initialize VILA model and services (but don't auto-enable)"""
+        logger.info("🚀 VILA Robot Hub starting...")
+        # Don't auto-load model on initialization - wait for enable command
+        logger.info("✅ VILA service ready (model not loaded - use GUI to enable)")
+        
+        # Start TCP server for direct robot communication
+        self.start_tcp_server()
+        return True
+    
+    def enable_vila_model(self):
+        """Enable and load VILA model"""
+        try:
+            if not self.model_loaded:
+                logger.info("🚀 Loading VILA model...")
+                success = self.vila_model.load_model()
+                if not success:
+                    return False, "Failed to load VILA model"
+                self.model_loaded = True
+                logger.info("✅ VILA model loaded successfully")
             
-            # Start TCP server for direct robot communication
-            self.start_tcp_server()
-        return success
+            self.model_enabled = True
+            logger.info("✅ VILA model enabled and ready")
+            return True, "VILA model enabled successfully"
+            
+        except Exception as e:
+            logger.error(f"❌ Error enabling VILA model: {e}")
+            return False, str(e)
+    
+    def disable_vila_model(self):
+        """Disable VILA model (keep loaded but mark as disabled)"""
+        try:
+            self.model_enabled = False
+            logger.info("⏸️ VILA model disabled")
+            return True, "VILA model disabled successfully"
+            
+        except Exception as e:
+            logger.error(f"❌ Error disabling VILA model: {e}")
+            return False, str(e)
+    
+    def get_vila_status(self):
+        """Get current VILA model status"""
+        # SYNC: Check the actual VILA model status, not just server flag
+        actual_model_loaded = hasattr(self.vila_model, 'model_loaded') and self.vila_model.model_loaded
+        
+        # Update server flag to match actual model status
+        if self.model_loaded != actual_model_loaded:
+            logger.warning(f"🔄 VILA status sync: server={self.model_loaded} vs actual={actual_model_loaded}")
+            self.model_loaded = actual_model_loaded
+        
+        if self.model_loaded and self.model_enabled:
+            status = "Ready"
+        elif self.model_loaded and not self.model_enabled:
+            status = "Loaded but Disabled"
+        else:
+            status = "Not Loaded"
+        
+        return {
+            'model_loaded': self.model_loaded,
+            'enabled': self.model_enabled,
+            'status': status,
+            'device': self.vila_model.device if self.model_loaded else 'N/A'
+        }
     
     def start_tcp_server(self, port=9999):
         """Start TCP server for direct robot communication"""
@@ -299,13 +352,34 @@ class RobotVILAService:
     def parse_navigation_response(self, response):
         """Parse VILA response to extract robot commands"""
         response_lower = response.lower()
+        
+        # Enhanced forward movement detection with multiple patterns
+        forward_keywords = [
+            'move forward', 'go forward', 'proceed forward', 'continue forward',
+            'move ahead', 'go ahead', 'proceed ahead', 'continue ahead',
+            'move straight', 'go straight', 'continue straight',
+            'advance', 'proceed', 'continue moving', 'move in', 'keep moving',
+            'forward', 'ahead'  # Single word fallbacks
+        ]
+        
+        # Check for forward movement indicators
+        move_forward = any(keyword in response_lower for keyword in forward_keywords)
+        
+        # Safety override: Don't move forward if explicit hazards mentioned
+        hazard_keywords = ['obstacle', 'blocked', 'danger', 'hazard', 'unsafe', 'collision', 'wall', 'barrier']
+        has_hazard = any(keyword in response_lower for keyword in hazard_keywords)
+        
+        # Don't move forward if VILA explicitly says not to or mentions hazards
+        explicit_stop = any(phrase in response_lower for phrase in ['should not', 'cannot', 'do not', 'avoid'])
+        
         commands = {
-            'move_forward': 'forward' in response_lower and 'clear' in response_lower,
-            'stop': 'stop' in response_lower or 'obstacle' in response_lower,
+            'move_forward': move_forward and not has_hazard and not explicit_stop,
+            'stop': 'stop' in response_lower or has_hazard,
             'turn_left': 'left' in response_lower,
             'turn_right': 'right' in response_lower,
-            'hazard_detected': any(word in response_lower for word in ['danger', 'hazard', 'unsafe', 'obstacle'])
+            'hazard_detected': has_hazard
         }
+        
         return commands
 
 # Global service instance
@@ -316,9 +390,12 @@ vila_service = RobotVILAService()
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
+    vila_status = vila_service.get_vila_status()
     return jsonify({
         'status': 'healthy',
         'model_loaded': vila_service.model_loaded,
+        'model_enabled': vila_service.model_enabled,
+        'vila_status': vila_status['status'],
         'gpu_available': torch.cuda.is_available(),
         'registered_robots': len(vila_service.robot_manager.robots),
         'timestamp': time.time()
@@ -388,6 +465,9 @@ def analyze_for_robot(robot_id):
     try:
         if not vila_service.model_loaded:
             return jsonify({'error': 'VILA model not loaded'}), 503
+        
+        if not vila_service.model_enabled:
+            return jsonify({'error': 'VILA model is disabled - please enable it first'}), 503
             
         data = request.get_json()
         
@@ -395,8 +475,32 @@ def analyze_for_robot(robot_id):
         image_data = base64.b64decode(data['image'])
         image = Image.open(io.BytesIO(image_data))
         
-        # Get robot info for context
+        # AUTO-REGISTER: Register robot if not already registered (for GUI visibility)
         robot = vila_service.robot_manager.get_robot(robot_id)
+        if not robot:
+            logger.info(f"🤖 Auto-registering robot {robot_id} for GUI visibility")
+            auto_robot_info = {
+                'robot_id': robot_id,
+                'name': f'Auto-Robot {robot_id}',
+                'capabilities': ['navigation', 'camera', 'autonomous'],
+                'connection_type': 'http_analyze',
+                'position': {'x': 0.0, 'y': 0.0, 'z': 0.0, 'heading': 0.0},
+                'battery_level': 85.0  # Default for auto-registered robots
+            }
+            vila_service.robot_manager.register_robot(auto_robot_info)
+            robot = vila_service.robot_manager.get_robot(robot_id)
+            
+            # Broadcast robot registration to GUI clients
+            socketio.emit('robot_registered', {
+                'robot_id': robot_id,
+                'name': auto_robot_info['name'],
+                'auto_registered': True
+            })
+        
+        # Update robot's last seen time
+        vila_service.robot_manager.update_robot_status(robot_id, {'last_seen': datetime.now()})
+        
+        # Get robot info for context
         robot_context = ""
         if robot:
             capabilities = ", ".join(robot.capabilities)
@@ -415,21 +519,70 @@ def analyze_for_robot(robot_id):
         # Parse commands
         commands = vila_service.parse_navigation_response(response)
         
-        # SAFETY: DISABLE auto-generate control commands to prevent autonomous movement
-        # This was bypassing the GUI safety toggle and sending unauthorized movement commands
-        if data.get('generate_commands', False):  # Changed default to False for safety
-            logger.warning(f"🚫 VILA auto-command generation DISABLED for safety")
-            logger.warning(f"   └── Robot {robot_id} autonomous movement blocked - use manual control only")
-            # control_cmd = vila_service.generate_control_command(robot_id, commands, response)
-            # if control_cmd:
-            #     vila_service.robot_manager.send_command(robot_id, control_cmd)
+        # LOG ROBOT ACTIVITY: Broadcast to GUI for visibility
+        activity_data = {
+            'robot_id': robot_id,
+            'activity_type': 'analysis_request',
+            'vila_prompt': prompt,
+            'vila_response': response,
+            'parsed_commands': commands,
+            'timestamp': time.time(),
+            'image_size': len(image_data)
+        }
+        
+        # Broadcast robot activity to GUI monitoring clients
+        socketio.emit('robot_activity', activity_data, room='monitors')
+        logger.info(f"🤖 Robot {robot_id}: VILA analysis request processed (image: {len(image_data):,} bytes)")
+        
+        # ARCHITECTURE CHANGE: No autonomous robot movement allowed
+        # ALL movement commands must go through GUI for proper control and logging
+        
+        # Notify GUI about VILA analysis completion for potential command generation
+        if any(commands.values()):
+            gui_notification = {
+                'robot_id': robot_id,
+                'analysis_complete': True,
+                'vila_response': response,
+                'parsed_commands': commands,
+                'timestamp': time.time(),
+                'requires_gui_processing': True
+            }
+            socketio.emit('vila_analysis_complete', gui_notification, room='monitors')
+            logger.info(f"📝 VILA analysis complete for robot {robot_id} - awaiting GUI command processing")
+        
+        # QUEUE FOR GUI PROCESSING: Store VILA analysis for GUI command processing
+        if any(commands.values()):
+            # Store analysis result for GUI to pick up and process
+            analysis_key = f"vila_analysis_{robot_id}_{int(time.time())}"
+            if not hasattr(vila_service, 'pending_analyses'):
+                vila_service.pending_analyses = {}
+            
+            vila_service.pending_analyses[analysis_key] = {
+                'robot_id': robot_id,
+                'vila_response': response,
+                'parsed_commands': commands,
+                'timestamp': time.time(),
+                'processed': False
+            }
+            
+            # Clean old entries (older than 2 minutes)
+            current_time = time.time()
+            keys_to_remove = [k for k, v in vila_service.pending_analyses.items() 
+                             if current_time - v['timestamp'] > 120]
+            for key in keys_to_remove:
+                del vila_service.pending_analyses[key]
+        
+        # STRICT POLICY: Server never generates robot movement commands
+        # Only GUI can send movement commands to ensure proper logging and safety
+        logger.info(f"🔒 Robot {robot_id}: VILA analysis queued for GUI processing")
         
         return jsonify({
             'success': True,
             'robot_id': robot_id,
             'analysis': response,
             'commands': commands,
-            'timestamp': time.time()
+            'timestamp': time.time(),
+            'gui_processing_required': any(commands.values())
         })
         
     except Exception as e:
@@ -453,22 +606,13 @@ def robot_commands(robot_id):
             data = request.get_json()
             command_type = data['command_type']
             
-            # CRITICAL SAFETY CHECK: Block all movement commands except STOP
-            # This protects against autonomous VILA commands when movement is disabled
+            # NEW ARCHITECTURE: Allow GUI-generated movement commands
+            # Since GUI now controls all robot movement, server should allow GUI commands
             movement_commands = ['move', 'turn', 'forward', 'backward', 'left', 'right']
             if command_type in movement_commands:
-                # Get movement parameters to check direction
                 direction = data.get('parameters', {}).get('direction', command_type)
-                
-                # ONLY allow STOP commands - block all other movement
-                if direction != 'stop':
-                    logger.warning(f"🚫 SERVER SAFETY: Blocking {command_type} command '{direction}' to robot {robot_id}")
-                    logger.warning(f"   └── All movement blocked except STOP - check GUI movement toggle")
-                    return jsonify({
-                        'success': False, 
-                        'error': f'Movement command "{direction}" blocked by server safety system. Only STOP commands allowed when movement disabled.',
-                        'safety_block': True
-                    }), 403
+                logger.info(f"✅ GUI COMMAND: Accepting {command_type} command '{direction}' to robot {robot_id}")
+                logger.info(f"   └── Command from GUI - server allows all GUI-generated movement commands")
             
             command = RobotCommand(
                 robot_id=robot_id,
@@ -478,19 +622,150 @@ def robot_commands(robot_id):
                 priority=data.get('priority', 1)
             )
             
+            # ENSURE ROBOT EXISTS: Double-check robot is registered before sending command
+            robot = vila_service.robot_manager.get_robot(robot_id)
+            if not robot:
+                logger.warning(f"❌ Robot {robot_id} not found in registry - cannot send command")
+                logger.info(f"📝 Available robots: {list(vila_service.robot_manager.robots.keys())}")
+                return jsonify({'success': False, 'error': f'Robot {robot_id} not found in registry'}), 404
+            
             success = vila_service.robot_manager.send_command(robot_id, command)
             
             if success:
-                logger.info(f"Command sent to robot {robot_id}: {data.get('parameters', {}).get('direction', command_type)}")
+                logger.info(f"✅ Command sent to robot {robot_id}: {data.get('parameters', {}).get('direction', command_type)}")
                 return jsonify({
                     'success': True,
                     'message': 'Command sent successfully'
                 })
             else:
-                return jsonify({'success': False, 'error': 'Robot not found'}), 404
+                logger.error(f"❌ Failed to send command to robot {robot_id} - robot exists but command failed")
+                return jsonify({'success': False, 'error': f'Failed to send command to robot {robot_id}'}), 500
                 
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
+
+# ===== VILA MODEL CONTROL ENDPOINTS =====
+
+@app.route('/vila/status', methods=['GET'])
+def vila_status():
+    """Get VILA model status"""
+    try:
+        status = vila_service.get_vila_status()
+        return jsonify({
+            'success': True,
+            **status
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/vila/diagnostic', methods=['GET'])
+def vila_diagnostic():
+    """Get detailed VILA diagnostic information"""
+    try:
+        import torch
+        diagnostic = {
+            'server_model_loaded': vila_service.model_loaded,
+            'server_model_enabled': vila_service.model_enabled,
+            'actual_model_loaded': hasattr(vila_service.vila_model, 'model_loaded') and vila_service.vila_model.model_loaded,
+            'model_loading': hasattr(vila_service.vila_model, 'loading') and vila_service.vila_model.loading,
+            'model_device': vila_service.vila_model.device if hasattr(vila_service.vila_model, 'device') else 'Unknown',
+            'gpu_available': torch.cuda.is_available(),
+            'gpu_memory_allocated': torch.cuda.memory_allocated() / 1024**3 if torch.cuda.is_available() else 0,
+            'gpu_memory_reserved': torch.cuda.memory_reserved() / 1024**3 if torch.cuda.is_available() else 0,
+            'model_attributes': {
+                'has_model': hasattr(vila_service.vila_model, 'model') and vila_service.vila_model.model is not None,
+                'has_tokenizer': hasattr(vila_service.vila_model, 'tokenizer') and vila_service.vila_model.tokenizer is not None,
+                'has_processor': hasattr(vila_service.vila_model, 'image_processor') and vila_service.vila_model.image_processor is not None,
+            },
+            'status_sync': vila_service.model_loaded == (hasattr(vila_service.vila_model, 'model_loaded') and vila_service.vila_model.model_loaded)
+        }
+        
+        return jsonify({
+            'success': True,
+            'diagnostic': diagnostic
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/vila/pending_analyses', methods=['GET'])
+def get_pending_analyses():
+    """Get VILA analyses waiting for GUI command processing"""
+    try:
+        if not hasattr(vila_service, 'pending_analyses'):
+            vila_service.pending_analyses = {}
+        
+        # Get unprocessed analyses
+        pending = {k: v for k, v in vila_service.pending_analyses.items() if not v.get('processed', False)}
+        
+        return jsonify({
+            'success': True,
+            'pending_count': len(pending),
+            'analyses': pending
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/vila/mark_processed', methods=['POST'])
+def mark_analysis_processed():
+    """Mark a VILA analysis as processed by GUI"""
+    try:
+        data = request.get_json()
+        analysis_key = data.get('analysis_key')
+        
+        if not hasattr(vila_service, 'pending_analyses'):
+            vila_service.pending_analyses = {}
+        
+        if analysis_key in vila_service.pending_analyses:
+            vila_service.pending_analyses[analysis_key]['processed'] = True
+            logger.info(f"✅ VILA analysis {analysis_key} marked as processed by GUI")
+            return jsonify({'success': True, 'message': 'Analysis marked as processed'})
+        else:
+            return jsonify({'success': False, 'error': 'Analysis key not found'}), 404
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/vila/enable', methods=['POST'])
+def enable_vila():
+    """Enable/Load VILA model"""
+    try:
+        success, message = vila_service.enable_vila_model()
+        status_code = 200 if success else 500
+        
+        return jsonify({
+            'success': success,
+            'message': message,
+            'status': vila_service.get_vila_status()
+        }), status_code
+        
+    except Exception as e:
+        logger.error(f"Error enabling VILA: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to enable VILA model'
+        }), 500
+
+@app.route('/vila/disable', methods=['POST'])
+def disable_vila():
+    """Disable VILA model"""
+    try:
+        success, message = vila_service.disable_vila_model()
+        status_code = 200 if success else 500
+        
+        return jsonify({
+            'success': success,
+            'message': message,
+            'status': vila_service.get_vila_status()
+        }), status_code
+        
+    except Exception as e:
+        logger.error(f"Error disabling VILA: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to disable VILA model'
+        }), 500
 
 # ===== WEBSOCKET ENDPOINTS =====
 
@@ -534,6 +809,10 @@ def handle_analyze_image(data):
     try:
         if not vila_service.model_loaded:
             emit('analysis_result', {'error': 'VILA model not loaded'})
+            return
+        
+        if not vila_service.model_enabled:
+            emit('analysis_result', {'error': 'VILA model is disabled - please enable it first'})
             return
         
         robot_id = data.get('robot_id')

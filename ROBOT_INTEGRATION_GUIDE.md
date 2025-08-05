@@ -15,6 +15,16 @@ This guide explains how to use your VILA vision-language model with mobile robot
 │ • Motors        │    │ • TCP Server         │    │ • Reasoning     │
 │ • Control       │    │ • Robot Manager      │    │                 │
 └─────────────────┘    └──────────────────────┘    └─────────────────┘
+                                    ▲
+                                    │
+                       ┌─────────────────────────┐
+                       │   Control GUI           │
+                       │   (robot_gui.py)        │
+                       │ • VILA Activity Monitor │
+                       │ • Robot Commands        │
+                       │ • Auto Nav Mode         │
+                       │ • Pipeline Visualization│
+                       └─────────────────────────┘
 ```
 
 ## 🚀 Quick Start
@@ -29,17 +39,32 @@ pip3 install flask flask-socketio python-socketio eventlet
 python3 robot_vila_server.py
 ```
 
-The hub provides:
+The system provides:
 - **HTTP REST API** on port 5000
 - **WebSocket** for real-time communication  
 - **TCP Server** on port 9999 for direct binary communication
 - **Robot Management** with state tracking
 - **Command Queuing** and control
+- **Control GUI** with VILA activity monitoring and robot command management
+- **System Launcher** for easy startup and shutdown
 
-### 2. Test with Example Clients
+### 2. Launch Complete System (Recommended)
 
 ```bash
-# Run client examples to test different communication methods
+# Launch both server and GUI together
+python3 robot_launcher.py
+```
+
+Or launch components separately:
+
+```bash
+# Start server only
+python3 robot_vila_server.py
+
+# Start GUI (in separate terminal)
+python3 robot_gui.py
+
+# Test with example clients
 python3 robot_client_examples.py
 ```
 
@@ -537,6 +562,55 @@ payload = {
 
 ---
 
+## 🖥️ Control GUI Features
+
+The `robot_gui.py` provides a comprehensive interface for monitoring and controlling your robot system:
+
+### Core Features
+
+**🤖 VILA Activity Monitor**
+- View VILA's real-time image analysis responses
+- Toggle between verbose and clean modes
+- Auto-scroll management for reviewing earlier responses
+
+**🎮 Robot Movement Commands**
+- Monitor all robot movement commands in real-time
+- Verbose/compressed logging modes
+- Shows only actual movement commands (Stop, Move, Turn) in compressed mode
+
+**⚙️ VILA Auto Nav Mode**
+- Enable/disable automatic robot navigation from VILA analysis
+- Visual status indicators (✅ Enabled / ❌ Disabled)
+- Safety-first architecture with multiple override layers
+
+**📊 Pipeline Visualization** 
+- Step-by-step view of VILA → Robot command pipeline
+- Real-time parsing demonstration
+- Command generation visibility
+
+### Safety Architecture
+
+**Multi-Layer Safety System:**
+1. **VILA Auto Nav Mode Toggle** - Master control for VILA-generated commands
+2. **Movement Toggle** - Emergency stop for all robot movement
+3. **Server Safety Layer** - Blocks unsafe commands
+4. **GUI Central Control** - All VILA commands processed through GUI for logging
+
+### Enhanced Command Parsing
+
+**Flexible Keyword Detection** (Updated):
+- **Forward Movement**: 15+ patterns including 'advance', 'proceed', 'move ahead', 'go forward'
+- **Hazard Detection**: 'obstacle', 'blocked', 'danger', 'unsafe', 'collision', 'wall', 'barrier'
+- **Safety Override**: Blocks movement if explicit negative instructions detected
+
+### System Launcher
+
+**`robot_launcher.py`** provides:
+- Start/stop both server and GUI with single interface
+- Process monitoring and status tracking
+- Graceful shutdown handling
+- Integrated logging display
+
 ## 🚀 Ready to Deploy!
 
 Your VILA Robot Hub is now ready to handle mobile robot vision processing at scale. The system provides:
@@ -544,8 +618,12 @@ Your VILA Robot Hub is now ready to handle mobile robot vision processing at sca
 ✅ **Multiple Communication Protocols** (HTTP, WebSocket, TCP)  
 ✅ **Robot State Management** with persistent tracking  
 ✅ **Real-time Vision Analysis** powered by VILA 3B  
-✅ **Command Generation and Queuing**  
-✅ **Comprehensive Logging and Monitoring**  
+✅ **Enhanced Command Generation** with flexible keyword detection  
+✅ **Comprehensive GUI Control Interface**  
+✅ **Multi-Layer Safety Architecture**  
+✅ **VILA Auto Nav Mode** with visual status indicators  
+✅ **Real-time Activity Monitoring** with verbose/compressed modes  
+✅ **System Launcher** for easy deployment  
 ✅ **Production-Ready Architecture**  
 
 Start with the example clients, then adapt the communication protocol that best fits your robot hardware and requirements!

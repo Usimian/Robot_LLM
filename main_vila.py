@@ -282,6 +282,13 @@ class VILAModel:
         except Exception as e:
             error_msg = f"❌ VILA generation error: {e}"
             print(error_msg)
+            
+            # CRITICAL: Check if error indicates model failure
+            error_str = str(e).lower()
+            if any(keyword in error_str for keyword in ['cuda', 'memory', 'model', 'tensor', 'device']):
+                print(f"🚨 VILA model may have failed - resetting model_loaded flag")
+                self.model_loaded = False
+            
             return error_msg
 
 # Add Silero TTS model loading (same as original)

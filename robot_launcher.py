@@ -101,7 +101,6 @@ class RobotLauncher:
         
         # Initial log message
         self.log_message("Robot System Launcher ready")
-        self.log_message("Make sure you have installed requirements: pip install -r requirements.txt")
 
     def log_message(self, message):
         """Add message to log"""

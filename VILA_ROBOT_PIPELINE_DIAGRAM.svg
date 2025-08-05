@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1200" height="800" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .node { fill: #f9f9f9; stroke: #333; stroke-width: 2; }
+      .text { font-family: Arial, sans-serif; font-size: 12px; text-anchor: middle; }
+      .title { font-weight: bold; font-size: 14px; }
+      .arrow { stroke: #333; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .dotted { stroke-dasharray: 5,5; }
+      .decision { fill: #ffebee; }
+      .process { fill: #e8f5e8; }
+      .input { fill: #e1f5fe; }
+      .model { fill: #f3e5f5; }
+      .response { fill: #fff3e0; }
+      .parser { fill: #e8f5e8; }
+      .generator { fill: #fff8e1; }
+      .command { fill: #fce4ec; }
+      .safety { fill: #ffebee; }
+      .execute { fill: #e8f5e8; }
+      .block { fill: #ffcdd2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333" />
+    </marker>
+  </defs>
+  
+  <!-- Title -->
+  <text x="600" y="30" class="text title" font-size="18">VILA → Robot Movement Pipeline</text>
+  
+  <!-- Input: Camera Image -->
+  <rect x="50" y="70" width="140" height="60" rx="10" class="node input"/>
+  <text x="120" y="90" class="text">📷 Camera Image</text>
+  
+  <!-- Prompt Input -->
+  <rect x="50" y="150" width="140" height="80" rx="10" class="node" style="fill: #fff8e1;"/>
+  <text x="120" y="170" class="text">📝 Navigation Prompt</text>
+  <text x="120" y="185" class="text" font-size="10">"Analyze this environment</text>
+  <text x="120" y="200" class="text" font-size="10">for robot navigation"</text>
+  <text x="120" y="215" class="text" font-size="10">+ robot capabilities</text>
+  
+  <!-- VILA Model -->
+  <rect x="250" y="70" width="140" height="60" rx="10" class="node model"/>
+  <text x="320" y="90" class="text">🤖 VILA Model</text>
+  
+  <!-- Text Response -->
+  <rect x="450" y="70" width="180" height="60" rx="10" class="node response"/>
+  <text x="540" y="85" class="text">📝 Text Response</text>
+  <text x="540" y="105" class="text">'I can see a clear path forward...'</text>
+  
+  <!-- Command Parser -->
+  <rect x="700" y="70" width="140" height="60" rx="10" class="node parser"/>
+  <text x="770" y="90" class="text">🔍 Command Parser</text>
+  
+  <!-- Evaluation nodes (E1-E5) -->
+  <rect x="580" y="180" width="160" height="50" rx="5" class="node process"/>
+  <text x="660" y="195" class="text">✓ 'forward' + 'clear'</text>
+  <text x="660" y="215" class="text">→ move_forward = True</text>
+  
+  <rect x="760" y="180" width="160" height="50" rx="5" class="node process"/>
+  <text x="840" y="195" class="text">✗ No 'stop' or 'obstacle'</text>
+  <text x="840" y="215" class="text">→ stop = False</text>
+  
+  <rect x="580" y="250" width="160" height="50" rx="5" class="node process"/>
+  <text x="660" y="265" class="text">✗ No 'left'</text>
+  <text x="660" y="285" class="text">→ turn_left = False</text>
+  
+  <rect x="760" y="250" width="160" height="50" rx="5" class="node process"/>
+  <text x="840" y="265" class="text">✗ No 'right'</text>
+  <text x="840" y="285" class="text">→ turn_right = False</text>
+  
+  <rect x="670" y="320" width="160" height="50" rx="5" class="node process"/>
+  <text x="750" y="335" class="text">✓ No hazard keywords</text>
+  <text x="750" y="355" class="text">→ hazard_detected = False</text>
+  
+  <!-- Command Generator -->
+  <rect x="650" y="420" width="160" height="60" rx="10" class="node generator"/>
+  <text x="730" y="440" class="text">⚙️ Command Generator</text>
+  
+  <!-- Robot Command -->
+  <rect x="600" y="530" width="260" height="80" rx="10" class="node command"/>
+  <text x="730" y="550" class="text">🤖 Robot Command</text>
+  <text x="730" y="570" class="text">{ 'command_type': 'move',</text>
+  <text x="730" y="590" class="text">'direction': 'forward', 'speed': 0.3, 'duration': 2.0 }</text>
+  
+  <!-- Safety Check (Diamond shape) -->
+  <polygon points="730,650 780,680 730,710 680,680" class="node safety"/>
+  <text x="730" y="675" class="text">🛡️ Safety Check</text>
+  <text x="730" y="690" class="text">Movement Enabled?</text>
+  
+  <!-- Execute Command -->
+  <rect x="500" y="750" width="160" height="50" rx="10" class="node execute"/>
+  <text x="580" y="770" class="text">✅ Execute Command</text>
+  <text x="580" y="785" class="text">Robot moves forward</text>
+  
+  <!-- Block Command -->
+  <rect x="800" y="750" width="160" height="50" rx="10" class="node block"/>
+  <text x="880" y="770" class="text">🚫 Block Command</text>
+  <text x="880" y="785" class="text">Robot stays still</text>
+  
+  <!-- Control Elements -->
+  <rect x="50" y="420" width="160" height="50" rx="10" class="node" style="fill: #e3f2fd;"/>
+  <text x="130" y="440" class="text">🎛️ VILA Autonomous</text>
+  <text x="130" y="455" class="text">Mode (GUI)</text>
+  
+  <rect x="50" y="490" width="160" height="50" rx="10" class="node" style="fill: #fff8e1;"/>
+  <text x="130" y="505" class="text">🛡️ Server Safety</text>
+  <text x="130" y="520" class="text">(Analysis Only)</text>
+  
+  <rect x="50" y="560" width="160" height="50" rx="10" class="node" style="fill: #f3e5f5;"/>
+  <text x="130" y="580" class="text">🔧 Movement Toggle</text>
+  
+  <!-- Arrows -->
+  <!-- Main flow -->
+  <line x1="190" y1="100" x2="250" y2="100" class="arrow"/>
+  <line x1="190" y1="190" x2="250" y2="100" class="arrow"/>
+  <line x1="390" y1="100" x2="450" y2="100" class="arrow"/>
+  <line x1="630" y1="100" x2="700" y2="100" class="arrow"/>
+  
+  <!-- Parser to evaluation nodes -->
+  <line x1="770" y1="130" x2="660" y2="180" class="arrow"/>
+  <line x1="770" y1="130" x2="840" y2="180" class="arrow"/>
+  <line x1="770" y1="130" x2="660" y2="250" class="arrow"/>
+  <line x1="770" y1="130" x2="840" y2="250" class="arrow"/>
+  <line x1="770" y1="130" x2="750" y2="320" class="arrow"/>
+  
+  <!-- Evaluation nodes to generator -->
+  <line x1="660" y1="230" x2="730" y2="420" class="arrow"/>
+  <line x1="840" y1="230" x2="730" y2="420" class="arrow"/>
+  <line x1="660" y1="300" x2="730" y2="420" class="arrow"/>
+  <line x1="840" y1="300" x2="730" y2="420" class="arrow"/>
+  <line x1="750" y1="370" x2="730" y2="420" class="arrow"/>
+  
+  <!-- Generator to command -->
+  <line x1="730" y1="480" x2="730" y2="530" class="arrow"/>
+  
+  <!-- Command to safety -->
+  <line x1="730" y1="610" x2="730" y2="650" class="arrow"/>
+  
+  <!-- Safety to execute/block -->
+  <line x1="680" y1="680" x2="580" y2="750" class="arrow"/>
+  <line x1="780" y1="680" x2="880" y2="750" class="arrow"/>
+  
+  <!-- Decision labels -->
+  <text x="620" y="740" class="text" font-size="10">Yes</text>
+  <text x="840" y="740" class="text" font-size="10">No</text>
+  
+  <!-- Control arrows (dotted) -->
+  <line x1="210" y1="445" x2="650" y2="450" class="arrow dotted"/>
+  <line x1="210" y1="675" x2="680" y2="680" class="arrow dotted"/>
+</svg>
