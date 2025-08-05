@@ -130,14 +130,11 @@ The GUI communicates with the robot server using:
 - **HTTP Port:** REST API port (default: 5000)  
 - **TCP Port:** Direct robot communication (default: 9999)
 
-### Robot Registration
-To register a new robot:
-1. Go to "Robots" tab
-2. Click "Register New Robot"
-3. Fill in robot details:
-   - Robot ID (unique identifier)
-   - Name (display name)
-   - Capabilities (comma-separated: navigation,manipulation,etc)
+### Single Robot System
+The GUI is designed for a single robot system:
+- Robots automatically register themselves when they connect to the server
+- The GUI automatically selects and controls the connected robot
+- Robot status and battery levels are monitored in real-time
 
 ## Architecture
 

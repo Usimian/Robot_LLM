@@ -84,12 +84,21 @@ class RobotManager:
         try:
             robot_id = robot_info['robot_id']
             with self.lock:
+                # Get battery level, default to unknown if not provided
+                provided_battery = robot_info.get('battery_level')
+                if provided_battery is None:
+                    battery_level = 0.0  # Unknown battery - force robot to send real data
+                    logger.warning(f"⚠️ Robot {robot_id} registered without battery level - defaulting to 0% (please send real battery data)")
+                else:
+                    battery_level = float(provided_battery)
+                    logger.info(f"🔋 Robot {robot_id} registered with battery level: {battery_level:.1f}%")
+                
                 self.robots[robot_id] = RobotStatus(
                     robot_id=robot_id,
                     name=robot_info.get('name', f'Robot_{robot_id}'),
                     last_seen=datetime.now(),
                     position=robot_info.get('position', {'x': 0, 'y': 0, 'z': 0, 'heading': 0}),
-                    battery_level=robot_info.get('battery_level', 100.0),
+                    battery_level=battery_level,
                     status='active',
                     capabilities=robot_info.get('capabilities', ['navigation']),
                     connection_type=robot_info.get('connection_type', 'http')
@@ -109,6 +118,11 @@ class RobotManager:
                 if robot_id in self.robots:
                     robot = self.robots[robot_id]
                     robot.last_seen = datetime.now()
+                    
+                    # Log battery level updates specifically
+                    if 'battery_level' in updates:
+                        old_battery = robot.battery_level
+                        logger.info(f"🔋 Robot {robot_id} battery update: {old_battery:.1f}% → {updates['battery_level']:.1f}%")
                     
                     for key, value in updates.items():
                         if hasattr(robot, key):
@@ -401,11 +415,14 @@ def analyze_for_robot(robot_id):
         # Parse commands
         commands = vila_service.parse_navigation_response(response)
         
-        # Auto-generate control commands if requested
-        if data.get('generate_commands', True):
-            control_cmd = vila_service.generate_control_command(robot_id, commands, response)
-            if control_cmd:
-                vila_service.robot_manager.send_command(robot_id, control_cmd)
+        # SAFETY: DISABLE auto-generate control commands to prevent autonomous movement
+        # This was bypassing the GUI safety toggle and sending unauthorized movement commands
+        if data.get('generate_commands', False):  # Changed default to False for safety
+            logger.warning(f"🚫 VILA auto-command generation DISABLED for safety")
+            logger.warning(f"   └── Robot {robot_id} autonomous movement blocked - use manual control only")
+            # control_cmd = vila_service.generate_control_command(robot_id, commands, response)
+            # if control_cmd:
+            #     vila_service.robot_manager.send_command(robot_id, control_cmd)
         
         return jsonify({
             'success': True,
@@ -434,10 +451,28 @@ def robot_commands(robot_id):
     elif request.method == 'POST':
         try:
             data = request.get_json()
+            command_type = data['command_type']
+            
+            # CRITICAL SAFETY CHECK: Block all movement commands except STOP
+            # This protects against autonomous VILA commands when movement is disabled
+            movement_commands = ['move', 'turn', 'forward', 'backward', 'left', 'right']
+            if command_type in movement_commands:
+                # Get movement parameters to check direction
+                direction = data.get('parameters', {}).get('direction', command_type)
+                
+                # ONLY allow STOP commands - block all other movement
+                if direction != 'stop':
+                    logger.warning(f"🚫 SERVER SAFETY: Blocking {command_type} command '{direction}' to robot {robot_id}")
+                    logger.warning(f"   └── All movement blocked except STOP - check GUI movement toggle")
+                    return jsonify({
+                        'success': False, 
+                        'error': f'Movement command "{direction}" blocked by server safety system. Only STOP commands allowed when movement disabled.',
+                        'safety_block': True
+                    }), 403
             
             command = RobotCommand(
                 robot_id=robot_id,
-                command_type=data['command_type'],
+                command_type=command_type,
                 parameters=data.get('parameters', {}),
                 timestamp=datetime.now(),
                 priority=data.get('priority', 1)
@@ -446,6 +481,7 @@ def robot_commands(robot_id):
             success = vila_service.robot_manager.send_command(robot_id, command)
             
             if success:
+                logger.info(f"Command sent to robot {robot_id}: {data.get('parameters', {}).get('direction', command_type)}")
                 return jsonify({
                     'success': True,
                     'message': 'Command sent successfully'

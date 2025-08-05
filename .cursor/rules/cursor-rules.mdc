@@ -3,10 +3,9 @@ description:
 globs: 
 alwaysApply: true
 ---
-This is a python project
-The Operating System is Ubuntu 22.04
-This is running on an AMD64 machine
-The application framework is tkinter
-The main.py application contains a GUI for Ollama
-The main_vila.py application contains a GUI for VILA
-The application is a webcam based chatbot
+The application is a client/server system.
+  The client runs on an AMD64 ubuntu 22.04 PC in a python/tkinter framework (this workspace)
+  The server runs on a jetson orin nano connected via ssh.
+A copy of the server code is at /home/marc/yahboomcar_ros2/yahboomcar_ws
+  The server code is a ROS2 system.
+  The server interface will be in the slam_nav package.

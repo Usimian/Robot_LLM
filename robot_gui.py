@@ -42,7 +42,8 @@ class ServerConfig:
 class RobotGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Robot Control Hub - VILA Integration")
+        self.base_title = "Robot Control Hub - VILA Integration"
+        self.root.title(self.base_title)
         self.root.geometry("1200x800")
         
         # Configuration
@@ -57,6 +58,8 @@ class RobotGUI:
         self.selected_robot_id = None
         self.connection_status = "Disconnected"
         self.update_queue = queue.Queue()
+        self.movement_enabled = True  # Movement toggle state
+        self.title_reset_timer = None  # Timer for title reset
         
         # Create GUI
         self.create_gui()
@@ -64,6 +67,9 @@ class RobotGUI:
         
         # Connect to server on startup
         self.root.after(1000, self.connect_to_server)
+        
+        # Start periodic robot status refresh for live battery updates
+        self.root.after(2000, self.start_robot_status_refresh)
 
     def setup_websocket(self):
         """Setup WebSocket event handlers"""
@@ -90,9 +96,34 @@ class RobotGUI:
 
     def create_gui(self):
         """Create the main GUI interface"""
+        # Top frame to hold notebook and controls
+        top_frame = ttk.Frame(self.root)
+        top_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Control frame for movement toggle (right side)
+        control_frame = ttk.LabelFrame(top_frame, text="Safety Controls", padding=5)
+        control_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
+        
+        # Movement toggle button
+        self.movement_toggle_var = tk.BooleanVar(value=True)
+        self.movement_toggle_btn = ttk.Checkbutton(
+            control_frame,
+            text="Movement\nEnabled",
+            variable=self.movement_toggle_var,
+            command=self.toggle_movement
+        )
+        self.movement_toggle_btn.pack(pady=10, padx=5)
+        
+        # Ensure initial state is synchronized and call update immediately
+        self.movement_enabled = self.movement_toggle_var.get()
+        print(f"🔧 INIT: Movement toggle initialized - enabled: {self.movement_enabled}")
+        
+        # Force initial button state update
+        self.root.after(100, self.update_movement_buttons_state)
+        
         # Main notebook for tabs
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.notebook = ttk.Notebook(top_frame)
+        self.notebook.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # Create tabs
         self.create_status_tab()
@@ -100,6 +131,75 @@ class RobotGUI:
         self.create_control_tab()
         self.create_monitoring_tab()
         self.create_settings_tab()
+
+    def toggle_movement(self):
+        """Toggle robot movement enable/disable"""
+        try:
+            # Update both variables to ensure sync
+            toggle_value = self.movement_toggle_var.get()
+            self.movement_enabled = toggle_value
+            
+            status = "Enabled" if self.movement_enabled else "DISABLED"
+            
+            # Debug logging
+            print(f"🔄 TOGGLE: Movement {status} - toggle_var: {toggle_value}, movement_enabled: {self.movement_enabled}")
+            
+            # Update button appearance with clearer text
+            self.movement_toggle_btn.configure(
+                text=f"Movement\n{status}"
+            )
+            
+            # Enable/disable movement buttons based on toggle state
+            self.update_movement_buttons_state()
+            
+            # Log the change
+            self.log_message(f"🔄 Robot movement {status.lower()}")
+            
+            # Cancel any pending title reset
+            if self.title_reset_timer:
+                self.root.after_cancel(self.title_reset_timer)
+            
+            # Update window title with clean base title
+            status_title = f"{self.base_title} - Movement {status}"
+            self.root.title(status_title)
+            
+            # Schedule reset to base title after 3 seconds
+            self.title_reset_timer = self.root.after(3000, self.reset_window_title)
+            
+        except Exception as e:
+            self.log_message(f"❌ Toggle error: {str(e)}")
+            print(f"Toggle error: {e}")  # Debug print
+
+    def update_movement_buttons_state(self):
+        """Enable or disable movement buttons based on movement_enabled state"""
+        try:
+            # Double-check toggle state for safety
+            toggle_state = self.movement_toggle_var.get()
+            final_enabled = self.movement_enabled and toggle_state
+            
+            state = 'normal' if final_enabled else 'disabled'
+            
+            # Update all movement buttons except STOP
+            movement_only_buttons = [self.btn_forward, self.btn_left, self.btn_right, self.btn_backward]
+            for button in movement_only_buttons:
+                button.configure(state=state)
+            
+            # Special handling for STOP button - always enabled for safety
+            self.btn_stop.configure(state='normal')
+            
+            status = "enabled" if final_enabled else "disabled"
+            print(f"🎛️ Movement buttons {status} (movement_enabled: {self.movement_enabled}, toggle: {toggle_state})")
+            
+        except Exception as e:
+            print(f"Button state update error: {e}")
+
+    def reset_window_title(self):
+        """Reset window title to base title"""
+        try:
+            self.root.title(self.base_title)
+            self.title_reset_timer = None
+        except Exception as e:
+            print(f"Title reset error: {e}")
 
     def create_status_tab(self):
         """Create the server status and communication tab"""
@@ -152,8 +252,8 @@ class RobotGUI:
         robots_frame = ttk.Frame(self.notebook)
         self.notebook.add(robots_frame, text="Robots")
         
-        # Robot list section
-        list_frame = ttk.LabelFrame(robots_frame, text="Connected Robots", padding=10)
+        # Robot list section  
+        list_frame = ttk.LabelFrame(robots_frame, text="Robot Status", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Robot treeview
@@ -175,32 +275,36 @@ class RobotGUI:
         self.robot_tree.bind('<<TreeviewSelect>>', self.on_robot_select)
         
         # Robot details section
-        details_frame = ttk.LabelFrame(robots_frame, text="Robot Details", padding=10)
+        details_frame = ttk.LabelFrame(robots_frame, text="Robot Information", padding=10)
         details_frame.pack(fill=tk.X, padx=5, pady=5)
         
         self.robot_details_text = scrolledtext.ScrolledText(details_frame, height=8, wrap=tk.WORD)
         self.robot_details_text.pack(fill=tk.BOTH, expand=True)
         
-        # Robot management buttons
+        # Robot management
         mgmt_frame = ttk.Frame(robots_frame)
         mgmt_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        ttk.Button(mgmt_frame, text="Refresh Robot List", 
+        ttk.Button(mgmt_frame, text="Refresh Status", 
                   command=self.refresh_robot_list).pack(side=tk.LEFT, padx=2)
-        ttk.Button(mgmt_frame, text="Register New Robot", 
-                  command=self.register_robot_dialog).pack(side=tk.LEFT, padx=2)
+        
+        # Status indicator
+        self.robot_count_var = tk.StringVar(value="No robots connected")
+        status_label = ttk.Label(mgmt_frame, textvariable=self.robot_count_var, 
+                                font=("Arial", 9), foreground="gray")
+        status_label.pack(side=tk.RIGHT, padx=10)
 
     def create_control_tab(self):
         """Create the robot control tab"""
         control_frame = ttk.Frame(self.notebook)
         self.notebook.add(control_frame, text="Robot Control")
         
-        # Robot selection for control
-        select_frame = ttk.LabelFrame(control_frame, text="Robot Selection", padding=10)
+        # Robot status for control
+        select_frame = ttk.LabelFrame(control_frame, text="Robot Control", padding=10)
         select_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        ttk.Label(select_frame, text="Selected Robot:").pack(side=tk.LEFT)
-        self.selected_robot_var = tk.StringVar(value="None")
+        ttk.Label(select_frame, text="Active Robot:").pack(side=tk.LEFT)
+        self.selected_robot_var = tk.StringVar(value="No robot connected")
         self.selected_robot_label = ttk.Label(select_frame, textvariable=self.selected_robot_var,
                                              font=("Arial", 10, "bold"))
         self.selected_robot_label.pack(side=tk.LEFT, padx=10)
@@ -213,17 +317,33 @@ class RobotGUI:
         move_grid = ttk.Frame(movement_frame)
         move_grid.pack(pady=10)
         
-        # Movement buttons
-        ttk.Button(move_grid, text="↑ Forward", width=12,
-                  command=lambda: self.send_movement_command('forward')).grid(row=0, column=1, padx=2, pady=2)
-        ttk.Button(move_grid, text="← Left", width=12,
-                  command=lambda: self.send_movement_command('left')).grid(row=1, column=0, padx=2, pady=2)
-        ttk.Button(move_grid, text="STOP", width=12,
-                  command=lambda: self.send_movement_command('stop')).grid(row=1, column=1, padx=2, pady=2)
-        ttk.Button(move_grid, text="Right →", width=12,
-                  command=lambda: self.send_movement_command('right')).grid(row=1, column=2, padx=2, pady=2)
-        ttk.Button(move_grid, text="↓ Backward", width=12,
-                  command=lambda: self.send_movement_command('backward')).grid(row=2, column=1, padx=2, pady=2)
+        # Movement buttons - store as instance variables for enable/disable control
+        self.btn_forward = ttk.Button(move_grid, text="↑ Forward", width=12,
+                                     command=lambda: self.send_movement_command('forward'))
+        self.btn_forward.grid(row=0, column=1, padx=2, pady=2)
+        
+        self.btn_left = ttk.Button(move_grid, text="← Left", width=12,
+                                  command=lambda: self.send_movement_command('left'))
+        self.btn_left.grid(row=1, column=0, padx=2, pady=2)
+        
+        self.btn_stop = ttk.Button(move_grid, text="STOP", width=12,
+                                  command=lambda: self.send_movement_command('stop'))
+        self.btn_stop.grid(row=1, column=1, padx=2, pady=2)
+        
+        self.btn_right = ttk.Button(move_grid, text="Right →", width=12,
+                                   command=lambda: self.send_movement_command('right'))
+        self.btn_right.grid(row=1, column=2, padx=2, pady=2)
+        
+        self.btn_backward = ttk.Button(move_grid, text="↓ Backward", width=12,
+                                      command=lambda: self.send_movement_command('backward'))
+        self.btn_backward.grid(row=2, column=1, padx=2, pady=2)
+        
+        # Store movement buttons for easy enable/disable
+        self.movement_buttons = [self.btn_forward, self.btn_left, self.btn_stop, 
+                               self.btn_right, self.btn_backward]
+        
+        # Initialize button states based on current movement setting
+        self.update_movement_buttons_state()
         
         # Image analysis section
         analysis_frame = ttk.LabelFrame(control_frame, text="Vision Analysis", padding=10)
@@ -464,27 +584,66 @@ class RobotGUI:
                         for item in self.robot_tree.get_children():
                             self.robot_tree.delete(item)
                         
-                        # Add robots to tree
+                        # Add robots to tree with better battery level formatting
                         for robot in robots:
+                            battery_level = robot.get('battery_level', 0)
+                            battery_color = ""
+                            if battery_level < 20:
+                                battery_color = " ⚠️"  # Warning for low battery
+                            elif battery_level < 10:
+                                battery_color = " 🔴"  # Critical battery
+                            
                             self.robot_tree.insert('', 'end', values=(
                                 robot.get('robot_id', 'Unknown'),
                                 robot.get('name', 'Unknown'),
                                 robot.get('status', 'Unknown'),
-                                f"{robot.get('battery_level', 0):.1f}%",
+                                f"{battery_level:.1f}%{battery_color}",
                                 robot.get('last_seen', 'Never'),
                                 f"({robot.get('position', {}).get('x', 0):.1f}, {robot.get('position', {}).get('y', 0):.1f})"
                             ))
                         
                         self.robots = {r['robot_id']: r for r in robots}
+                        
+                        # Auto-select the single robot for control
+                        if len(robots) == 1 and not self.selected_robot_id:
+                            robot_id = robots[0]['robot_id']
+                            self.selected_robot_id = robot_id
+                            self.selected_robot_var.set(robot_id)
+                            print(f"🤖 Auto-selected single robot: {robot_id}")
                     
                     self.root.after(0, update_robot_display)
-                    self.log_message(f"Refreshed robot list: {len(robots)} robots")
+                    
+                    # Update status indicator
+                    if len(robots) == 0:
+                        self.robot_count_var.set("No robots connected")
+                    elif len(robots) == 1:
+                        self.robot_count_var.set("✅ 1 robot connected")
+                    else:
+                        self.robot_count_var.set(f"⚠️ {len(robots)} robots connected (expected 1)")
+                    
+                    self.log_message(f"Refreshed robot status: {len(robots)} robot{'s' if len(robots) != 1 else ''}")
                 else:
                     self.log_message(f"Failed to refresh robot list: HTTP {response.status_code}")
             except Exception as e:
                 self.log_message(f"Robot list refresh error: {str(e)}")
         
         threading.Thread(target=refresh_worker, daemon=True).start()
+
+    def start_robot_status_refresh(self):
+        """Start periodic robot status refresh for live battery updates"""
+        def periodic_refresh():
+            while True:
+                try:
+                    time.sleep(15)  # Refresh every 15 seconds
+                    if hasattr(self, 'robots') and self.robots:
+                        self.refresh_robot_list()
+                except Exception as e:
+                    print(f"Periodic refresh error: {e}")
+                    time.sleep(30)  # Wait longer on error
+        
+        refresh_thread = threading.Thread(target=periodic_refresh, daemon=True)
+        refresh_thread.start()
+        print("🔄 Started periodic robot status refresh (every 15 seconds)")
 
     def on_robot_select(self, event):
         """Handle robot selection in the tree"""
@@ -502,59 +661,47 @@ class RobotGUI:
                 self.robot_details_text.delete(1.0, tk.END)
                 self.robot_details_text.insert(tk.END, details)
 
-    def register_robot_dialog(self):
-        """Show dialog to register a new robot"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Register New Robot")
-        dialog.geometry("400x300")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        # Robot registration form
-        ttk.Label(dialog, text="Robot ID:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        robot_id_entry = tk.Entry(dialog, width=30)
-        robot_id_entry.grid(row=0, column=1, padx=5, pady=5)
-        
-        ttk.Label(dialog, text="Name:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        name_entry = tk.Entry(dialog, width=30)
-        name_entry.grid(row=1, column=1, padx=5, pady=5)
-        
-        ttk.Label(dialog, text="Capabilities:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
-        capabilities_entry = tk.Entry(dialog, width=30)
-        capabilities_entry.grid(row=2, column=1, padx=5, pady=5)
-        capabilities_entry.insert(0, "navigation,manipulation")
-        
-        def register_robot():
-            robot_data = {
-                'robot_id': robot_id_entry.get(),
-                'name': name_entry.get() or f"Robot_{robot_id_entry.get()}",
-                'capabilities': capabilities_entry.get().split(','),
-                'connection_type': 'http'
-            }
-            
-            try:
-                response = requests.post(f"{self.config.http_url}/robots/register", 
-                                       json=robot_data, timeout=5)
-                if response.status_code == 200:
-                    messagebox.showinfo("Success", "Robot registered successfully!")
-                    dialog.destroy()
-                    self.refresh_robot_list()
-                else:
-                    messagebox.showerror("Error", f"Registration failed: {response.text}")
-            except Exception as e:
-                messagebox.showerror("Error", f"Registration error: {str(e)}")
-        
-        ttk.Button(dialog, text="Register", command=register_robot).grid(row=3, column=1, pady=10)
+
 
     # Control methods
     def send_movement_command(self, direction):
         """Send movement command to selected robot"""
+        # Debug logging
+        toggle_state = self.movement_toggle_var.get()
+        print(f"🔍 DEBUG: Movement command '{direction}' - Toggle state: {toggle_state}, movement_enabled: {self.movement_enabled}")
+        
         if not self.selected_robot_id:
-            messagebox.showwarning("No Robot Selected", "Please select a robot first")
+            messagebox.showwarning("No Robot Connected", "No robot is currently connected. Please ensure your robot is registered with the server.")
+            return
+        
+        # CRITICAL SAFETY CHECK: Block ALL movement commands when disabled (ONLY allow STOP for emergency)
+        # Check BOTH variables to ensure safety
+        toggle_state = self.movement_toggle_var.get()
+        movement_allowed = self.movement_enabled and toggle_state
+        
+        # ONLY allow STOP commands when movement is disabled - block everything else
+        if direction != 'stop' and not movement_allowed:
+            print(f"🚫 CRITICAL SAFETY BLOCK: Movement command '{direction}' blocked")
+            print(f"   └── movement_enabled: {self.movement_enabled}, toggle_state: {toggle_state}")
+            print(f"   └── ONLY 'stop' commands allowed when movement disabled")
+            self.log_message(f"🚫 BLOCKED: Movement '{direction}' - Safety disabled (enabled:{self.movement_enabled}, toggle:{toggle_state})")
+            
+            # Also log to server logs for debugging
+            print(f"🔴 SERVER LOG: Movement command '{direction}' BLOCKED by safety system")
             return
         
         def send_command_worker():
             try:
+                # DOUBLE SAFETY CHECK: Final verification before sending HTTP request
+                # ABSOLUTE SAFETY: Block ANY command that is not 'stop' when movement disabled
+                if direction != 'stop' and (not self.movement_enabled or not self.movement_toggle_var.get()):
+                    print(f"❌ FINAL SAFETY BLOCK: Movement command '{direction}' blocked in worker thread")
+                    print(f"   └── This should NEVER happen - primary safety check failed!")
+                    self.log_message(f"❌ CRITICAL: Command '{direction}' blocked at final safety layer - PRIMARY SAFETY FAILED!")
+                    return
+                
+                print(f"✅ SENDING: Command '{direction}' to robot {self.selected_robot_id}")
+                
                 command_data = {
                     'command_type': 'move' if direction != 'stop' else 'stop',
                     'parameters': {
@@ -570,13 +717,17 @@ class RobotGUI:
                 )
                 
                 if response.status_code == 200:
-                    self.log_message(f"Command sent to {self.selected_robot_id}: {direction}")
+                    self.log_message(f"✅ Command sent to {self.selected_robot_id}: {direction}")
+                    print(f"✅ SUCCESS: Command '{direction}' sent successfully")
                 else:
-                    self.log_message(f"Command failed: {response.text}")
+                    self.log_message(f"❌ Command failed: {response.text}")
+                    print(f"❌ FAILED: Command '{direction}' failed - {response.text}")
                     
             except Exception as e:
-                self.log_message(f"Command error: {str(e)}")
+                self.log_message(f"❌ Command error: {str(e)}")
+                print(f"❌ ERROR: Command '{direction}' error - {str(e)}")
         
+        # Start command thread
         threading.Thread(target=send_command_worker, daemon=True).start()
 
     def load_image_for_analysis(self):
