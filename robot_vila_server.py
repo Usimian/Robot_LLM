@@ -61,6 +61,7 @@ class RobotStatus:
     status: str  # active, idle, error, offline
     capabilities: List[str]  # navigation, manipulation, etc.
     connection_type: str  # http, websocket, tcp
+    sensor_data: Dict[str, Any] = None  # Real-time sensor readings
 
 @dataclass
 class RobotCommand:
@@ -101,7 +102,8 @@ class RobotManager:
                     battery_level=battery_level,
                     status='active',
                     capabilities=robot_info.get('capabilities', ['navigation']),
-                    connection_type=robot_info.get('connection_type', 'http')
+                    connection_type=robot_info.get('connection_type', 'http'),
+                    sensor_data=robot_info.get('sensor_data', {})
                 )
                 self.command_queues[robot_id] = queue.Queue()
             
@@ -145,8 +147,16 @@ class RobotManager:
             return list(self.robots.values())
     
     def send_command(self, robot_id: str, command: RobotCommand) -> bool:
-        """Send command to robot"""
+        """Send command to robot with safety validation"""
         try:
+            # CRITICAL SAFETY: Block movement commands at the robot manager level
+            movement_commands = ['move', 'turn', 'forward', 'backward', 'left', 'right']
+            if command.command_type in movement_commands:
+                logger.warning(f"🚫 ROBOT MANAGER SAFETY BLOCK: Movement command '{command.command_type}' rejected")
+                logger.warning(f"   └── All movement commands are now blocked at robot manager level")
+                logger.warning(f"   └── Only GUI with proper safety confirmation can send movement commands")
+                return False
+            
             if robot_id in self.command_queues:
                 self.command_queues[robot_id].put(command)
                 logger.info(f"Command sent to robot {robot_id}: {command.command_type}")
@@ -459,6 +469,49 @@ def robot_status(robot_id):
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/robots/<robot_id>/sensors', methods=['POST'])
+def update_robot_sensors(robot_id):
+    """Update robot sensor data"""
+    try:
+        data = request.get_json()
+        sensor_data = data.get('sensor_data', {})
+        
+        # Update robot sensor data
+        robot = vila_service.robot_manager.get_robot(robot_id)
+        if not robot:
+            return jsonify({'success': False, 'error': 'Robot not found'}), 404
+        
+        # Log significant sensor updates
+        if 'battery_voltage' in sensor_data:
+            logger.info(f"🔋 Robot {robot_id} battery voltage: {sensor_data['battery_voltage']:.2f}V")
+        
+        # Update sensor data and last seen time
+        updates = {
+            'sensor_data': sensor_data,
+            'last_seen': datetime.now()
+        }
+        
+        success = vila_service.robot_manager.update_robot_status(robot_id, updates)
+        
+        if success:
+            # Broadcast sensor update to monitoring clients
+            socketio.emit('robot_sensors', {
+                'robot_id': robot_id,
+                'sensor_data': sensor_data,
+                'timestamp': time.time()
+            }, room='monitors')
+            
+            return jsonify({
+                'success': True,
+                'message': 'Sensor data updated'
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Failed to update sensors'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error updating sensors for robot {robot_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/robots/<robot_id>/analyze', methods=['POST'])
 def analyze_for_robot(robot_id):
     """Analyze image for specific robot"""
@@ -520,6 +573,13 @@ def analyze_for_robot(robot_id):
         commands = vila_service.parse_navigation_response(response)
         
         # LOG ROBOT ACTIVITY: Broadcast to GUI for visibility
+        # Create small thumbnail for GUI display (to save bandwidth)
+        thumbnail = image.copy()
+        thumbnail.thumbnail((120, 80), Image.Resampling.LANCZOS)
+        thumbnail_buffer = io.BytesIO()
+        thumbnail.save(thumbnail_buffer, format='PNG')
+        thumbnail_b64 = base64.b64encode(thumbnail_buffer.getvalue()).decode('utf-8')
+        
         activity_data = {
             'robot_id': robot_id,
             'activity_type': 'analysis_request',
@@ -527,7 +587,8 @@ def analyze_for_robot(robot_id):
             'vila_response': response,
             'parsed_commands': commands,
             'timestamp': time.time(),
-            'image_size': len(image_data)
+            'image_size': len(image_data),
+            'thumbnail': thumbnail_b64  # Include small thumbnail for GUI
         }
         
         # Broadcast robot activity to GUI monitoring clients
@@ -606,13 +667,28 @@ def robot_commands(robot_id):
             data = request.get_json()
             command_type = data['command_type']
             
-            # NEW ARCHITECTURE: Allow GUI-generated movement commands
-            # Since GUI now controls all robot movement, server should allow GUI commands
+            # CRITICAL SAFETY: Server-side movement validation
+            # Even though GUI should control movement, server must validate for safety
             movement_commands = ['move', 'turn', 'forward', 'backward', 'left', 'right']
             if command_type in movement_commands:
                 direction = data.get('parameters', {}).get('direction', command_type)
-                logger.info(f"✅ GUI COMMAND: Accepting {command_type} command '{direction}' to robot {robot_id}")
-                logger.info(f"   └── Command from GUI - server allows all GUI-generated movement commands")
+                
+                # SERVER-SIDE SAFETY CHECK: Refuse movement commands if safety not confirmed
+                # This prevents ANY external process from bypassing GUI safety
+                safety_confirmed = data.get('safety_confirmed', False)
+                gui_movement_enabled = data.get('gui_movement_enabled', False)
+                
+                if not safety_confirmed or not gui_movement_enabled:
+                    logger.warning(f"🚫 SERVER SAFETY BLOCK: Movement command '{direction}' rejected - missing safety confirmation")
+                    logger.warning(f"   └── safety_confirmed: {safety_confirmed}, gui_movement_enabled: {gui_movement_enabled}")
+                    return jsonify({
+                        'success': False, 
+                        'error': f'Movement command rejected by server safety system',
+                        'details': 'GUI must confirm movement is enabled and safe'
+                    }), 403
+                
+                logger.info(f"✅ SAFE COMMAND: Accepting {command_type} command '{direction}' to robot {robot_id}")
+                logger.info(f"   └── Command from GUI with safety confirmation - server allows movement")
             
             command = RobotCommand(
                 robot_id=robot_id,

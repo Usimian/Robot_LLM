@@ -127,6 +127,35 @@ class HTTPRobotClient:
             print(f"❌ Status update error: {e}")
             return False
 
+    def send_sensor_data(self, sensor_data):
+        """Send sensor readings to the hub"""
+        if not self.registered:
+            print("❌ Robot not registered. Call register() first.")
+            return False
+        
+        try:
+            payload = {
+                'sensor_data': sensor_data
+            }
+            
+            response = requests.post(
+                f"{self.server_url}/robots/{self.robot_id}/sensors",
+                json=payload
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('success'):
+                    print(f"📊 Sensor data sent successfully")
+                    return True
+            
+            print(f"❌ Sensor update failed: {response.text}")
+            return False
+            
+        except Exception as e:
+            print(f"❌ Sensor update error: {e}")
+            return False
+
 class TCPRobotClient:
     """TCP client for direct binary communication"""
     
@@ -419,6 +448,61 @@ def demo_websocket_client():
     finally:
         client.disconnect_ws()
 
+def demo_sensor_data():
+    """Demo sending REAL sensor data to the hub (for testing only)"""
+    print("\n📊 Testing Sensor Data Transmission...")
+    print("⚠️  This demo sends simulated sensor data for testing purposes only")
+    print("⚠️  Real robots should send actual sensor readings")
+    
+    # Create HTTP client
+    client = HTTPRobotClient(robot_id="sensor_demo_robot")
+    
+    # Register with sensor capabilities
+    robot_info = {
+        'robot_id': 'sensor_demo_robot',
+        'name': 'Sensor Demo Robot',
+        'capabilities': ['navigation', 'camera', 'sensors'],
+        'connection_type': 'http',
+        'position': {'x': 1.5, 'y': 2.0, 'z': 0.0, 'heading': 45.0},
+        'battery_level': 87.5,
+        'sensor_data': {
+            'battery_voltage': 12.4,
+            'temperature': 35.2,
+            'lidar_distance': 2.8,
+            'imu_heading': 45.0,
+            'camera_status': 'active'
+        }
+    }
+    
+    if not client.register(robot_info):
+        print("❌ Failed to register robot")
+        return
+    
+    # Simulate sending periodic sensor updates
+    print("📊 Sending sensor data updates...")
+    import random
+    
+    for i in range(5):
+        # Simulate changing sensor values
+        sensor_data = {
+            'battery_voltage': 12.4 - (i * 0.1) + random.uniform(-0.1, 0.1),
+            'temperature': 35.2 + random.uniform(-2.0, 3.0),
+            'lidar_distance': 2.8 + random.uniform(-1.0, 1.0),
+            'imu_heading': (45.0 + i * 10) % 360,
+            'camera_status': 'active' if i % 2 == 0 else 'processing',
+            'gps_lat': 37.7749 + random.uniform(-0.001, 0.001),
+            'gps_lon': -122.4194 + random.uniform(-0.001, 0.001)
+        }
+        
+        if client.send_sensor_data(sensor_data):
+            print(f"  Update {i+1}/5: Battery {sensor_data['battery_voltage']:.2f}V, "
+                  f"Temp {sensor_data['temperature']:.1f}°C, "
+                  f"Lidar {sensor_data['lidar_distance']:.2f}m")
+        
+        time.sleep(2)  # Wait 2 seconds between updates
+    
+    print("✅ Sensor data demo completed")
+
 def main():
     """Main demo function"""
     print("🤖 VILA Robot Hub Client Examples")
@@ -441,9 +525,10 @@ def main():
     print("1. HTTP REST API client")
     print("2. TCP direct client")
     print("3. WebSocket real-time client")
-    print("4. Run all demos")
+    print("4. Sensor Data Demo")
+    print("5. Run all demos")
     
-    choice = input("Enter choice (1-4): ").strip()
+    choice = input("Enter choice (1-5): ").strip()
     
     if choice == "1":
         demo_http_client()
@@ -452,9 +537,12 @@ def main():
     elif choice == "3":
         demo_websocket_client()
     elif choice == "4":
+        demo_sensor_data()
+    elif choice == "5":
         demo_http_client()
         demo_tcp_client()
         demo_websocket_client()
+        demo_sensor_data()
     else:
         print("Invalid choice")
 

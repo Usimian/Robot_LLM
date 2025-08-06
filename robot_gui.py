@@ -103,6 +103,16 @@ class RobotGUI:
             logger.info(f"Robot analysis received: {data.get('robot_id')}")
             self.update_queue.put(('robot_analysis', data))
 
+        @self.sio.event
+        def robot_activity(data):
+            logger.info(f"Robot activity received: {data.get('robot_id')} - {data.get('activity_type')}")
+            self.update_queue.put(('robot_activity', data))
+
+        @self.sio.event
+        def robot_sensors(data):
+            logger.info(f"Robot sensors received: {data.get('robot_id')}")
+            self.update_queue.put(('robot_sensors', data))
+
     def create_gui(self):
         """Create the main GUI interface"""
         # Top frame to hold notebook and controls
@@ -143,6 +153,28 @@ class RobotGUI:
         )
         self.movement_toggle_btn.pack(pady=10, padx=5)
         
+        # VILA Image Thumbnail Display
+        self.vila_thumbnail_frame = ttk.LabelFrame(control_frame, text="VILA Image", padding=5)
+        self.vila_thumbnail_frame.pack(pady=(10, 0), padx=5, fill=tk.X)
+        
+        # Thumbnail label
+        self.vila_thumbnail_label = ttk.Label(
+            self.vila_thumbnail_frame,
+            text="No image sent\nto VILA yet",
+            background="lightgray",
+            anchor="center",
+            font=("Arial", 8),
+            cursor="hand2"
+        )
+        self.vila_thumbnail_label.pack(pady=5, padx=5, fill=tk.BOTH, expand=True)
+        
+        # Bind click event to show full-size image
+        self.vila_thumbnail_label.bind("<Button-1>", self.show_vila_image_fullsize)
+        
+        # Initialize thumbnail attributes
+        self.vila_thumbnail_image = None
+        self.last_vila_image = None
+        
         # Ensure initial state is synchronized and call update immediately
         self.movement_enabled = self.movement_toggle_var.get()
         self.vila_enabled = self.vila_enabled_var.get()
@@ -166,6 +198,191 @@ class RobotGUI:
         self.create_vila_activity_tab()  # New VILA activity tab
         self.create_monitoring_tab()
         self.create_settings_tab()
+
+    def update_vila_thumbnail(self, image):
+        """Update the VILA thumbnail with the image being sent for analysis"""
+        try:
+            if image is None:
+                return
+            
+            # Store the original image
+            self.last_vila_image = image.copy()
+            
+            # Scale image to fill frame width (approximately 240px) while maintaining aspect ratio
+            target_width = 240
+            max_height = 180
+            
+            # Calculate scaling to fill width
+            original_width, original_height = image.size
+            scale_factor = target_width / original_width
+            new_height = int(original_height * scale_factor)
+            
+            # If scaled height exceeds max, scale by height instead and crop width
+            if new_height > max_height:
+                scale_factor = max_height / original_height
+                new_width = int(original_width * scale_factor)
+                new_height = max_height
+                
+                # Scale and crop to center
+                thumbnail = image.copy()
+                try:
+                    thumbnail = thumbnail.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                except AttributeError:
+                    thumbnail = thumbnail.resize((new_width, new_height), Image.ANTIALIAS)
+                
+                # Crop to target width if needed (center crop)
+                if new_width > target_width:
+                    left = (new_width - target_width) // 2
+                    right = left + target_width
+                    thumbnail = thumbnail.crop((left, 0, right, new_height))
+            else:
+                # Scale to fill width exactly
+                try:
+                    thumbnail = image.resize((target_width, new_height), Image.Resampling.LANCZOS)
+                except AttributeError:
+                    thumbnail = image.resize((target_width, new_height), Image.ANTIALIAS)
+            
+            # Convert to PhotoImage for tkinter
+            self.vila_thumbnail_image = ImageTk.PhotoImage(thumbnail)
+            
+            # Update the label
+            self.vila_thumbnail_label.configure(
+                image=self.vila_thumbnail_image,
+                text="",  # Clear text when showing image
+                background="white"
+            )
+            
+            # Reset frame title for manual analysis
+            self.vila_thumbnail_frame.configure(text="VILA Image")
+            
+            logger.info(f"Updated VILA thumbnail: {thumbnail.size} (scaled to fill frame width)")
+            
+        except Exception as e:
+            logger.error(f"Error updating VILA thumbnail: {e}")
+            self.vila_thumbnail_label.configure(
+                text=f"Error loading\nthumbnail",
+                background="lightgray"
+            )
+
+    def show_vila_image_fullsize(self, event):
+        """Show the full-size image that was sent to VILA"""
+        if self.last_vila_image is None:
+            messagebox.showinfo("No Image", "No image has been sent to VILA yet.")
+            return
+        
+        try:
+            # Create a new window to display the full-size image
+            image_window = tk.Toplevel(self.root)
+            image_window.title("VILA Image - Full Size")
+            image_window.geometry("800x600")
+            
+            # Create a frame with scrollbars for large images
+            canvas = tk.Canvas(image_window)
+            scrollbar_v = ttk.Scrollbar(image_window, orient="vertical", command=canvas.yview)
+            scrollbar_h = ttk.Scrollbar(image_window, orient="horizontal", command=canvas.xview)
+            scrollable_frame = ttk.Frame(canvas)
+            
+            scrollable_frame.bind(
+                "<Configure>",
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+            
+            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar_v.set, xscrollcommand=scrollbar_h.set)
+            
+            # Display the full-size image
+            display_image = ImageTk.PhotoImage(self.last_vila_image)
+            image_label = ttk.Label(scrollable_frame, image=display_image)
+            image_label.pack(padx=10, pady=10)
+            
+            # Keep a reference to prevent garbage collection
+            image_label.image = display_image
+            
+            # Pack scrollbars and canvas
+            canvas.pack(side="left", fill="both", expand=True)
+            scrollbar_v.pack(side="right", fill="y")
+            scrollbar_h.pack(side="bottom", fill="x")
+            
+            # Center the window
+            image_window.transient(self.root)
+            image_window.grab_set()
+            
+        except Exception as e:
+            logger.error(f"Error showing full-size VILA image: {e}")
+            messagebox.showerror("Error", f"Could not display image: {e}")
+
+    def update_vila_thumbnail_from_robot(self, thumbnail_image, robot_id):
+        """Update VILA thumbnail from robot's automatic image analysis"""
+        try:
+            # Store the original thumbnail as the last VILA image
+            self.last_vila_image = thumbnail_image.copy()
+            
+            # Scale image to fill frame width (same logic as manual analysis)
+            target_width = 240
+            max_height = 180
+            
+            # Calculate scaling to fill width
+            original_width, original_height = thumbnail_image.size
+            scale_factor = target_width / original_width
+            new_height = int(original_height * scale_factor)
+            
+            # If scaled height exceeds max, scale by height instead and crop width
+            if new_height > max_height:
+                scale_factor = max_height / original_height
+                new_width = int(original_width * scale_factor)
+                new_height = max_height
+                
+                # Scale and crop to center
+                scaled_thumbnail = thumbnail_image.copy()
+                try:
+                    scaled_thumbnail = scaled_thumbnail.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                except AttributeError:
+                    scaled_thumbnail = scaled_thumbnail.resize((new_width, new_height), Image.ANTIALIAS)
+                
+                # Crop to target width if needed (center crop)
+                if new_width > target_width:
+                    left = (new_width - target_width) // 2
+                    right = left + target_width
+                    scaled_thumbnail = scaled_thumbnail.crop((left, 0, right, new_height))
+            else:
+                # Scale to fill width exactly
+                try:
+                    scaled_thumbnail = thumbnail_image.resize((target_width, new_height), Image.Resampling.LANCZOS)
+                except AttributeError:
+                    scaled_thumbnail = thumbnail_image.resize((target_width, new_height), Image.ANTIALIAS)
+            
+            # Convert to PhotoImage for tkinter
+            self.vila_thumbnail_image = ImageTk.PhotoImage(scaled_thumbnail)
+            
+            # Update the label with robot info
+            self.vila_thumbnail_label.configure(
+                image=self.vila_thumbnail_image,
+                text="",  # Clear text when showing image
+                background="lightblue"  # Different color to indicate auto-analysis
+            )
+            
+            # Update the frame title to show it's from a robot
+            self.vila_thumbnail_frame.configure(text=f"VILA Image (from {robot_id})")
+            
+            logger.info(f"Updated VILA thumbnail from robot {robot_id}: {scaled_thumbnail.size} (scaled to fill frame width)")
+            
+        except Exception as e:
+            logger.error(f"Error updating VILA thumbnail from robot: {e}")
+
+    def flash_title_with_activity(self, message):
+        """Flash the window title to show activity"""
+        try:
+            # Update title with activity message
+            self.root.title(f"{self.base_title} - {message}")
+            
+            # Reset title after 3 seconds
+            if self.title_reset_timer:
+                self.root.after_cancel(self.title_reset_timer)
+            
+            self.title_reset_timer = self.root.after(3000, lambda: self.root.title(self.base_title))
+            
+        except Exception as e:
+            logger.error(f"Error flashing title: {e}")
 
     def toggle_movement(self):
         """Toggle robot movement enable/disable"""
@@ -445,21 +662,37 @@ class RobotGUI:
         sensor_grid = ttk.Frame(sensor_frame)
         sensor_grid.pack(fill=tk.X)
         
-        # Placeholder sensor displays
+        # Real sensor displays (no placeholders)
         sensors = [
             ("Lidar Distance", "meters"), ("IMU Heading", "degrees"), 
-            ("GPS Position", "lat/lon"), ("Camera Status", "active/inactive"),
+            ("GPS Position", "lat/lon"), ("Camera Status", "status"),
             ("Battery Voltage", "volts"), ("Motor Temperature", "°C")
         ]
         
         self.sensor_vars = {}
+        self.sensor_labels = {}
         for i, (sensor, unit) in enumerate(sensors):
             row, col = i // 2, (i % 2) * 2
             
-            ttk.Label(sensor_grid, text=f"{sensor}:").grid(row=row, column=col, sticky=tk.W, padx=5, pady=2)
-            var = tk.StringVar(value=f"-- {unit}")
+            # Label for sensor name
+            name_label = ttk.Label(sensor_grid, text=f"{sensor}:")
+            name_label.grid(row=row, column=col, sticky=tk.W, padx=5, pady=2)
+            
+            # Variable and label for sensor value
+            var = tk.StringVar(value="----")
             self.sensor_vars[sensor] = var
-            ttk.Label(sensor_grid, textvariable=var).grid(row=row, column=col+1, sticky=tk.W, padx=5, pady=2)
+            value_label = ttk.Label(sensor_grid, textvariable=var, foreground="red")
+            value_label.grid(row=row, column=col+1, sticky=tk.W, padx=5, pady=2)
+            self.sensor_labels[sensor] = value_label
+        
+        # Add connection status indicator
+        status_frame = ttk.Frame(sensor_frame)
+        status_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Label(status_frame, text="Sensor Status:").pack(side=tk.LEFT, padx=5)
+        self.sensor_status_var = tk.StringVar(value="No robot selected")
+        self.sensor_status_label = ttk.Label(status_frame, textvariable=self.sensor_status_var, foreground="gray")
+        self.sensor_status_label.pack(side=tk.LEFT, padx=5)
 
     def create_settings_tab(self):
         """Create the settings tab"""
@@ -723,11 +956,146 @@ class RobotGUI:
                     analysis = data.get('analysis', 'No analysis')
                     self.log_message(f"Analysis for {robot_id}: {analysis[:100]}...")
                     
+                elif update_type == 'robot_activity':
+                    self.handle_robot_activity(data)
+                    
+                elif update_type == 'robot_sensors':
+                    self.handle_robot_sensors(data)
+                    
                 elif update_type == 'connection_status':
                     self.update_connection_status(data)
                     
         except queue.Empty:
             pass
+
+    def handle_robot_activity(self, data):
+        """Handle robot activity events (including automatic image analysis)"""
+        try:
+            robot_id = data.get('robot_id')
+            activity_type = data.get('activity_type')
+            
+            if activity_type == 'analysis_request':
+                # Robot sent an image for analysis
+                analysis = data.get('vila_response', 'No analysis')
+                thumbnail_b64 = data.get('thumbnail')
+                
+                # Log the activity
+                self.log_message(f"🤖 Auto-analysis from {robot_id}: {analysis[:100]}...")
+                
+                # Update thumbnail if we have image data
+                if thumbnail_b64:
+                    try:
+                        # Decode thumbnail
+                        thumbnail_data = base64.b64decode(thumbnail_b64)
+                        thumbnail_image = Image.open(io.BytesIO(thumbnail_data))
+                        
+                        # Update VILA thumbnail display
+                        self.update_vila_thumbnail_from_robot(thumbnail_image, robot_id)
+                        
+                    except Exception as img_error:
+                        logger.error(f"Error processing robot thumbnail: {img_error}")
+                
+                # Update title to show activity
+                self.flash_title_with_activity(f"VILA Analysis from {robot_id}")
+                
+        except Exception as e:
+            logger.error(f"Error handling robot activity: {e}")
+
+    def handle_robot_sensors(self, data):
+        """Handle robot sensor data updates"""
+        try:
+            robot_id = data.get('robot_id')
+            sensor_data = data.get('sensor_data', {})
+            
+            # Update sensor display if this is the selected robot
+            if robot_id == self.selected_robot_id:
+                if sensor_data:
+                    self.update_sensor_display(sensor_data)
+                else:
+                    self.clear_sensor_display(f"Robot {robot_id} sent empty sensor data")
+            
+            # Log sensor updates
+            sensor_summary = []
+            if 'battery_voltage' in sensor_data:
+                sensor_summary.append(f"Battery: {sensor_data['battery_voltage']:.2f}V")
+            if 'temperature' in sensor_data:
+                sensor_summary.append(f"Temp: {sensor_data['temperature']:.1f}°C")
+            if 'lidar_distance' in sensor_data:
+                sensor_summary.append(f"Lidar: {sensor_data['lidar_distance']:.2f}m")
+            
+            if sensor_summary:
+                self.log_message(f"📊 Sensors from {robot_id}: {', '.join(sensor_summary)}")
+            else:
+                self.log_message(f"⚠️ Robot {robot_id} sent sensor update with no recognizable data")
+                
+        except Exception as e:
+            logger.error(f"Error handling robot sensors: {e}")
+            if self.selected_robot_id:
+                self.clear_sensor_display("Error processing sensor data")
+
+    def update_sensor_display(self, sensor_data):
+        """Update the sensor display with real data only"""
+        try:
+            if not sensor_data:
+                self.clear_sensor_display("No sensor data received")
+                return
+            
+            # Mapping of sensor data keys to display names
+            sensor_mapping = {
+                'lidar_distance': ('Lidar Distance', 'meters'),
+                'imu_heading': ('IMU Heading', 'degrees'),
+                'gps_lat': ('GPS Position', 'lat/lon'),
+                'camera_status': ('Camera Status', 'status'),
+                'battery_voltage': ('Battery Voltage', 'volts'),
+                'temperature': ('Motor Temperature', '°C')
+            }
+            
+            # Track which sensors have data
+            sensors_updated = 0
+            
+            # First, clear all displays to unavailable state
+            for display_name in self.sensor_vars.keys():
+                self.sensor_vars[display_name].set("----")
+                self.sensor_labels[display_name].configure(foreground="red")
+            
+            # Update only sensors that have real data
+            for key, value in sensor_data.items():
+                if key in sensor_mapping:
+                    display_name, unit = sensor_mapping[key]
+                    if display_name in self.sensor_vars:
+                        try:
+                            if key == 'gps_lat' and 'gps_lon' in sensor_data:
+                                # Special handling for GPS coordinates
+                                formatted_value = f"{value:.6f}, {sensor_data['gps_lon']:.6f}"
+                            elif isinstance(value, (int, float)):
+                                formatted_value = f"{value:.2f} {unit}"
+                            else:
+                                formatted_value = f"{value}"
+                            
+                            self.sensor_vars[display_name].set(formatted_value)
+                            # Change color to indicate live data
+                            self.sensor_labels[display_name].configure(foreground="black")
+                            sensors_updated += 1
+                            
+                        except (ValueError, TypeError) as e:
+                            # Handle invalid sensor values
+                            self.sensor_vars[display_name].set("Invalid data")
+                            self.sensor_labels[display_name].configure(foreground="red")
+                            logger.warning(f"Invalid sensor value for {key}: {value} ({e})")
+            
+            # Update status
+            if sensors_updated > 0:
+                self.sensor_status_var.set(f"Live data ({sensors_updated} sensors)")
+                self.sensor_status_label.configure(foreground="green")
+                logger.info(f"Updated {sensors_updated} sensors with live data")
+            else:
+                self.sensor_status_var.set("No valid sensor data")
+                self.sensor_status_label.configure(foreground="orange")
+            
+        except Exception as e:
+            logger.error(f"Error updating sensor display: {e}")
+            self.sensor_status_var.set("Sensor update error")
+            self.sensor_status_label.configure(foreground="red")
 
     # Communication methods
     def connect_to_server(self):
@@ -779,6 +1147,18 @@ class RobotGUI:
     def update_connection_status(self, status):
         """Update the connection status display"""
         self.connection_status = status
+        
+        # Update sensor display based on connection status
+        if status == "Disconnected" and hasattr(self, 'sensor_status_var'):
+            self.clear_sensor_display("Server disconnected")
+        elif status.startswith("Connected") and hasattr(self, 'sensor_status_var'):
+            # If we have a selected robot, try to refresh its sensor data
+            if self.selected_robot_id and self.selected_robot_id in self.robots:
+                robot = self.robots[self.selected_robot_id]
+                if 'sensor_data' in robot and robot['sensor_data']:
+                    self.update_sensor_display(robot['sensor_data'])
+                else:
+                    self.clear_sensor_display(f"Robot {self.selected_robot_id} - no sensor data available")
         self.status_var.set(status)
         
         if "Connected" in status:
@@ -900,6 +1280,45 @@ class RobotGUI:
                 details = json.dumps(robot, indent=2, default=str)
                 self.robot_details_text.delete(1.0, tk.END)
                 self.robot_details_text.insert(tk.END, details)
+                
+                # Update sensor display with current robot's sensor data
+                if 'sensor_data' in robot and robot['sensor_data']:
+                    self.update_sensor_display(robot['sensor_data'])
+                else:
+                    # Clear sensor display with specific reason
+                    robot_status = robot.get('status', 'unknown')
+                    if robot_status == 'offline':
+                        self.clear_sensor_display(f"Robot {robot_id} is offline")
+                    elif robot_status == 'error':
+                        self.clear_sensor_display(f"Robot {robot_id} has errors")
+                    else:
+                        self.clear_sensor_display(f"Robot {robot_id} - no sensor data available")
+
+    def clear_sensor_display(self, reason="No robot selected"):
+        """Clear all sensor displays with specific reason"""
+        try:
+            for sensor_name, var in self.sensor_vars.items():
+                var.set("----")
+                self.sensor_labels[sensor_name].configure(foreground="red")
+            
+            # Update status with reason
+            self.sensor_status_var.set(reason)
+            
+            # Color code the status based on reason
+            if "No robot selected" in reason:
+                self.sensor_status_label.configure(foreground="gray")
+            elif "error" in reason.lower() or "failed" in reason.lower():
+                self.sensor_status_label.configure(foreground="red")
+            elif "disconnected" in reason.lower() or "offline" in reason.lower():
+                self.sensor_status_label.configure(foreground="orange")
+            else:
+                self.sensor_status_label.configure(foreground="gray")
+                
+        except Exception as e:
+            logger.error(f"Error clearing sensor display: {e}")
+            if hasattr(self, 'sensor_status_var'):
+                self.sensor_status_var.set("Display error")
+                self.sensor_status_label.configure(foreground="red")
 
 
 
@@ -951,13 +1370,19 @@ class RobotGUI:
                 print(f"✅ SENDING: Command '{direction}' to robot {self.selected_robot_id}")
                 self.log_movement_activity(f"Sending HTTP request: {direction} to {self.selected_robot_id}", "COMMAND")
                 
+                # Include safety confirmation for server-side validation
+                toggle_state = self.movement_toggle_var.get()
+                movement_allowed = self.movement_enabled and toggle_state
+                
                 command_data = {
                     'command_type': 'move' if direction != 'stop' else 'stop',
                     'parameters': {
                         'direction': direction,
                         'speed': 0.3 if direction != 'stop' else 0.0,
                         'duration': 2.0
-                    }
+                    },
+                    'safety_confirmed': True,  # GUI confirms it has done safety checks
+                    'gui_movement_enabled': movement_allowed  # Current safety state
                 }
                 
                 # Log the exact command being sent
@@ -1051,6 +1476,10 @@ class RobotGUI:
                 # Convert image to base64
                 self.log_vila_activity("Converting image to base64 format", "PROCESSING")
                 self.log_pipeline_activity("Preparing image for VILA analysis...", "IMAGE")
+                
+                # Update thumbnail in System Controls (on main thread)
+                self.root.after(0, lambda: self.update_vila_thumbnail(self.current_image))
+                
                 buffer = io.BytesIO()
                 self.current_image.save(buffer, format='PNG')
                 image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
@@ -1173,13 +1602,17 @@ class RobotGUI:
                             'command_type': action,
                             'parameters': params,
                             'timestamp': datetime.now().isoformat(),
-                            'priority': 2 if commands.get('hazard_detected') else 1
+                            'priority': 2 if commands.get('hazard_detected') else 1,
+                            'safety_confirmed': True,  # GUI confirms it has done safety checks
+                            'gui_movement_enabled': movement_allowed  # Current safety state from above
                         }
                         
                         self.log_pipeline_activity(f"Generated robot command: {json.dumps(robot_command, indent=2)}", "GENERATION")
                         
-                        # STEP 5: Robot Execution (if enabled)
-                        if self.movement_enabled:
+                        # STEP 5: Robot Execution (if enabled AND toggle is on)
+                        toggle_state = self.movement_toggle_var.get()
+                        movement_allowed = self.movement_enabled and toggle_state
+                        if movement_allowed:
                             self.log_pipeline_activity("Executing robot command...", "EXECUTION")
                             
                             # Send the generated command
@@ -1200,8 +1633,16 @@ class RobotGUI:
                                 self.log_pipeline_activity(f"❌ Command execution error: {str(cmd_e)}", "EXECUTION")
                                 self.log_movement_activity(f"VILA command error: {str(cmd_e)}", "ERROR")
                         else:
-                            self.log_pipeline_activity("🚫 Movement disabled - robot command NOT executed", "EXECUTION")
-                            self.log_pipeline_activity("Enable movement toggle to allow robot execution", "EXECUTION")
+                            # Log specific reason why command was blocked
+                            if not self.movement_enabled:
+                                self.log_pipeline_activity("🚫 Movement system disabled - robot command NOT executed", "EXECUTION")
+                                self.log_pipeline_activity("Enable movement system to allow robot execution", "EXECUTION")
+                            elif not toggle_state:
+                                self.log_pipeline_activity("🚫 Movement toggle disabled - robot command NOT executed", "EXECUTION")
+                                self.log_pipeline_activity("Enable movement toggle to allow robot execution", "EXECUTION")
+                            else:
+                                self.log_pipeline_activity("🚫 Movement blocked - robot command NOT executed", "EXECUTION")
+                                self.log_pipeline_activity("Check movement settings", "EXECUTION")
                     else:
                         self.log_pipeline_activity("🔒 Autonomous mode disabled - no robot commands generated", "GENERATION")
                         self.log_pipeline_activity("Enable 'VILA Auto Nav Mode' to see command generation", "GENERATION")
@@ -1777,10 +2218,11 @@ class RobotGUI:
                     self.root.after(0, update_error)
                     
             except Exception as status_error:
+                error_msg = str(status_error)
                 def update_error():
                     self.vila_model_status_var.set("Connection Error")
                     self.vila_status_display.configure(foreground="red")
-                    print(f"VILA status check error: {status_error}")
+                    print(f"VILA status check error: {error_msg}")
                 
                 self.root.after(0, update_error)
         
@@ -1841,8 +2283,10 @@ class RobotGUI:
                 vila_response = analysis_data.get('vila_response', '')
                 parsed_commands = analysis_data.get('parsed_commands', {})
                 
-                # Only process if GUI autonomous mode is enabled
-                if hasattr(self, 'vila_autonomous') and self.vila_autonomous and self.movement_enabled:
+                # Only process if GUI autonomous mode is enabled AND movement toggle is enabled
+                toggle_state = self.movement_toggle_var.get()
+                movement_allowed = self.movement_enabled and toggle_state
+                if hasattr(self, 'vila_autonomous') and self.vila_autonomous and movement_allowed:
                     self.log_movement_activity(f"🎮 GUI Processing VILA analysis: {analysis_key}", "COMMAND")
                     self.log_vila_activity(f"Robot {robot_id}: VILA analysis intercepted by GUI", "PROCESSING")
                     self.log_vila_activity(f"VILA response: {vila_response[:100]}{'...' if len(vila_response) > 100 else ''}", "RESPONSE")
@@ -1881,8 +2325,16 @@ class RobotGUI:
                     self.mark_analysis_processed(analysis_key)
                     
                 else:
-                    # Log that autonomous mode is disabled
-                    self.log_movement_activity(f"🔒 VILA analysis for robot {robot_id} - autonomous mode disabled", "INFO")
+                    # Log specific reason why VILA analysis was blocked
+                    if not hasattr(self, 'vila_autonomous') or not self.vila_autonomous:
+                        self.log_movement_activity(f"🔒 VILA analysis for robot {robot_id} - autonomous mode disabled", "INFO")
+                    elif not self.movement_enabled:
+                        self.log_movement_activity(f"🚫 VILA analysis for robot {robot_id} - movement system disabled", "BLOCKED")
+                    elif not toggle_state:
+                        self.log_movement_activity(f"🚫 VILA analysis for robot {robot_id} - movement toggle disabled", "BLOCKED")
+                    else:
+                        self.log_movement_activity(f"🔒 VILA analysis for robot {robot_id} - movement blocked (unknown reason)", "BLOCKED")
+                    
                     # Still mark as processed to avoid reprocessing
                     self.mark_analysis_processed(analysis_key)
                     
