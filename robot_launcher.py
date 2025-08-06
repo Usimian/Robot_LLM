@@ -309,11 +309,10 @@ class RobotLauncher:
 
     def on_closing(self):
         """Handle window closing"""
-        if messagebox.askokcancel("Quit", "Do you want to quit? This will stop all running processes."):
-            self.stop_all()
-            # Give processes time to stop
-            time.sleep(2)
-            self.root.destroy()
+        self.stop_all()
+        # Give processes time to stop
+        time.sleep(2)
+        self.root.destroy()
 
 
 def main():

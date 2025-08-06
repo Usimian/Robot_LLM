@@ -67,6 +67,9 @@ class RobotGUI:
         # Connect to server on startup
         self.root.after(1000, self.connect_to_server)
         
+        # Immediately refresh robot list after connection for single robot system
+        self.root.after(1500, self.refresh_robot_list)
+        
         # Start periodic robot status refresh for live battery updates
         self.root.after(2000, self.start_robot_status_refresh)
         
@@ -81,6 +84,12 @@ class RobotGUI:
         
         # Start sensor polling for monitoring tab
         self.root.after(3000, self.start_sensor_polling)
+        
+        # Start periodic image capture for VILA thumbnail (after robot connection)
+        self.root.after(6000, self.start_periodic_image_capture)
+        
+        # Start periodic VILA auto navigation analysis
+        self.root.after(8000, self.start_periodic_vila_auto_nav)
 
     def setup_websocket(self):
         """Setup WebSocket event handlers"""
@@ -122,13 +131,21 @@ class RobotGUI:
         control_frame = ttk.LabelFrame(top_frame, text="System Controls", padding=5)
         control_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
         
-        # VILA Model toggle button
+        # VILA Model toggle button (push button style)
         self.vila_enabled_var = tk.BooleanVar(value=False)
-        self.vila_toggle_btn = ttk.Checkbutton(
+        self.vila_toggle_btn = tk.Button(
             control_frame,
-            text="VILA Model\nDisabled",
-            variable=self.vila_enabled_var,
-            command=self.toggle_vila_model
+            text="VILA Model OFF",
+            command=self.toggle_vila_model,
+            font=("Arial", 10, "bold"),
+            bg="red",
+            fg="white",
+            activebackground="darkred",
+            activeforeground="white",
+            relief="raised",
+            bd=3,
+            width=12,
+            height=2
         )
         self.vila_toggle_btn.pack(pady=10, padx=5)
         
@@ -142,15 +159,55 @@ class RobotGUI:
         )
         self.vila_status_display.pack(pady=(0, 10), padx=5)
         
-        # Movement toggle button
-        self.movement_toggle_var = tk.BooleanVar(value=True)
-        self.movement_toggle_btn = ttk.Checkbutton(
+        # Movement toggle button (push button style)
+        self.movement_toggle_var = tk.BooleanVar(value=False)
+        self.movement_toggle_btn = tk.Button(
             control_frame,
-            text="Movement\nEnabled",
-            variable=self.movement_toggle_var,
-            command=self.toggle_movement
+            text="Drive OFF",
+            command=self.toggle_movement,
+            font=("Arial", 10, "bold"),
+            bg="red",
+            fg="white",
+            activebackground="darkred",
+            activeforeground="white",
+            relief="raised",
+            bd=3,
+            width=12,
+            height=2
         )
         self.movement_toggle_btn.pack(pady=10, padx=5)
+        
+        # Key Sensor Status Display
+        self.sensor_status_frame = ttk.LabelFrame(control_frame, text="Robot Status", padding=5)
+        self.sensor_status_frame.pack(pady=(10, 0), padx=5, fill=tk.X)
+        
+        # Create key sensor displays (Battery, Camera, Temperature)
+        key_sensors = [
+            ("Battery", "volts"), 
+            ("Camera", "status"), 
+            ("Orin CPU", "°C")
+        ]
+        
+        # Initialize key sensor variables if not already done
+        if not hasattr(self, 'sensor_vars'):
+            self.sensor_vars = {}
+            self.sensor_labels = {}
+        
+        for sensor, unit in key_sensors:
+            sensor_row = ttk.Frame(self.sensor_status_frame)
+            sensor_row.pack(fill=tk.X, pady=1)
+            
+            # Sensor name label
+            name_label = ttk.Label(sensor_row, text=f"{sensor}:", font=("Arial", 8), width=12)
+            name_label.pack(side=tk.LEFT)
+            
+            # Sensor value variable and label
+            if sensor not in self.sensor_vars:
+                self.sensor_vars[sensor] = tk.StringVar(value="----")
+            value_label = ttk.Label(sensor_row, textvariable=self.sensor_vars[sensor], 
+                                  foreground="red", font=("Arial", 8, "bold"))
+            value_label.pack(side=tk.LEFT, padx=(5, 0))
+            self.sensor_labels[sensor] = value_label
         
         # VILA Image Thumbnail Display
         self.vila_thumbnail_frame = ttk.LabelFrame(control_frame, text="VILA Image", padding=5)
@@ -184,6 +241,9 @@ class RobotGUI:
         
         # Force initial button state update
         self.root.after(100, self.update_movement_buttons_state)
+        self.root.after(150, self.update_drive_button_appearance)
+        self.root.after(175, self.update_vila_button_appearance)
+        self.root.after(190, self.update_vila_autonomous_button_appearance)
         self.root.after(200, self.check_vila_status)
         
         # Main notebook for tabs
@@ -385,17 +445,19 @@ class RobotGUI:
     def toggle_movement(self):
         """Toggle robot movement enable/disable"""
         try:
-            # Update both variables to ensure sync
-            toggle_value = self.movement_toggle_var.get()
-            self.movement_enabled = toggle_value
+            # Manually toggle the state for push button behavior
+            current_state = self.movement_toggle_var.get()
+            new_state = not current_state
+            self.movement_toggle_var.set(new_state)
+            self.movement_enabled = new_state
             
             status = "Enabled" if self.movement_enabled else "DISABLED"
             
             # Debug logging
-            print(f"🔄 TOGGLE: Movement {status} - toggle_var: {toggle_value}, movement_enabled: {self.movement_enabled}")
+            print(f"🔄 TOGGLE: Movement {status} - toggle_var: {new_state}, movement_enabled: {self.movement_enabled}")
             
             # Log to movement activity display
-            safety_msg = f"Movement safety toggle changed: {status} (enabled:{self.movement_enabled}, toggle:{toggle_value})"
+            safety_msg = f"Movement safety toggle changed: {status} (enabled:{self.movement_enabled}, toggle:{new_state})"
             activity_type = "SAFETY" if not self.movement_enabled else "INFO"
             self.log_movement_activity(safety_msg, activity_type)
             
@@ -406,10 +468,23 @@ class RobotGUI:
             else:
                 self.movement_status_label.configure(foreground="red")
             
-            # Update button appearance with clearer text
-            self.movement_toggle_btn.configure(
-                text=f"Movement\n{status}"
-            )
+            # Update button appearance - Drive ON/OFF with colors
+            if self.movement_enabled:
+                self.movement_toggle_btn.configure(
+                    text="Drive ON",
+                    bg="green",
+                    fg="white",
+                    activebackground="darkgreen",
+                    activeforeground="white"
+                )
+            else:
+                self.movement_toggle_btn.configure(
+                    text="Drive OFF",
+                    bg="red",
+                    fg="white",
+                    activebackground="darkred",
+                    activeforeground="white"
+                )
             
             # Enable/disable movement buttons based on toggle state
             self.update_movement_buttons_state()
@@ -417,9 +492,16 @@ class RobotGUI:
             # 🛡️ CRITICAL SAFETY: Auto-disable VILA autonomous mode when movement is disabled
             if not self.movement_enabled and hasattr(self, 'vila_autonomous') and self.vila_autonomous:
                 self.log_movement_activity("🔒 SAFETY: Auto-disabling VILA autonomous mode (movement disabled)", "SAFETY")
-                self.vila_autonomous_var.set(False)  # Update the checkbox
+                self.vila_autonomous_var.set(False)  # Update the variable
                 self.vila_autonomous = False  # Update the internal state
-                self.vila_autonomous_btn.configure(text="VILA Auto Nav Mode\n❌ Disabled")  # Update button text
+                # Update button appearance to disabled state
+                self.vila_autonomous_btn.configure(
+                    text="VILA Auto Nav\nDisabled",
+                    bg="red",
+                    fg="white",
+                    activebackground="darkred",
+                    activeforeground="white"
+                )
                 self.log_pipeline_activity("🛡️ VILA autonomous mode automatically disabled for safety", "SAFETY")
             
             # Log the change
@@ -440,6 +522,72 @@ class RobotGUI:
             self.log_message(f"❌ Toggle error: {str(e)}")
             self.log_movement_activity(f"Toggle error: {str(e)}", "ERROR")
             print(f"Toggle error: {e}")  # Debug print
+
+    def update_drive_button_appearance(self):
+        """Update the drive button appearance based on current state"""
+        try:
+            if self.movement_enabled:
+                self.movement_toggle_btn.configure(
+                    text="Drive ON",
+                    bg="green",
+                    fg="white",
+                    activebackground="darkgreen",
+                    activeforeground="white"
+                )
+            else:
+                self.movement_toggle_btn.configure(
+                    text="Drive OFF",
+                    bg="red",
+                    fg="white",
+                    activebackground="darkred",
+                    activeforeground="white"
+                )
+        except Exception as e:
+            print(f"Error updating drive button appearance: {e}")
+
+    def update_vila_button_appearance(self):
+        """Update the VILA button appearance based on current state"""
+        try:
+            if self.vila_enabled:
+                self.vila_toggle_btn.configure(
+                    text="VILA Model\nEnabled",
+                    bg="green",
+                    fg="white",
+                    activebackground="darkgreen",
+                    activeforeground="white"
+                )
+            else:
+                self.vila_toggle_btn.configure(
+                    text="VILA Model\nDisabled",
+                    bg="red",
+                    fg="white",
+                    activebackground="darkred",
+                    activeforeground="white"
+                )
+        except Exception as e:
+            print(f"Error updating VILA button appearance: {e}")
+
+    def update_vila_autonomous_button_appearance(self):
+        """Update the VILA Auto Nav button appearance based on current state"""
+        try:
+            if self.vila_autonomous:
+                self.vila_autonomous_btn.configure(
+                    text="VILA Auto Nav\nEnabled",
+                    bg="green",
+                    fg="white",
+                    activebackground="darkgreen",
+                    activeforeground="white"
+                )
+            else:
+                self.vila_autonomous_btn.configure(
+                    text="VILA Auto Nav\nDisabled",
+                    bg="red",
+                    fg="white",
+                    activebackground="darkred",
+                    activeforeground="white"
+                )
+        except Exception as e:
+            print(f"Error updating VILA Auto Nav button appearance: {e}")
 
     def update_movement_buttons_state(self):
         """Enable or disable movement buttons based on movement_enabled state"""
@@ -581,6 +729,8 @@ class RobotGUI:
         
         ttk.Button(img_upload_frame, text="Load Image", 
                   command=self.load_image_for_analysis).pack(side=tk.LEFT, padx=2)
+        ttk.Button(img_upload_frame, text="Capture from Robot", 
+                  command=self.capture_image_from_robot).pack(side=tk.LEFT, padx=2)
         ttk.Button(img_upload_frame, text="Analyze Image", 
                   command=self.analyze_image).pack(side=tk.LEFT, padx=2)
         
@@ -623,25 +773,27 @@ class RobotGUI:
         sensor_grid = ttk.Frame(sensor_frame)
         sensor_grid.pack(fill=tk.X)
         
-        # Essential sensor displays for single robot system (updated per ROBOT_UNIFIED_INTEGRATION_GUIDE.md)
-        sensors = [
-            ("Battery Voltage", "volts"), ("IMU Acceleration", "m/s²"), 
-            ("Camera Status", "status"), ("Temperature", "°C")
+        # Additional sensor displays for monitoring tab (key sensors are in System Controls)
+        additional_sensors = [
+            ("IMU Acceleration", "m/s²")
         ]
         
-        self.sensor_vars = {}
-        self.sensor_labels = {}
-        for i, (sensor, unit) in enumerate(sensors):
+        # Initialize sensor variables if not already done (they should be from System Controls)
+        if not hasattr(self, 'sensor_vars'):
+            self.sensor_vars = {}
+            self.sensor_labels = {}
+        
+        for i, (sensor, unit) in enumerate(additional_sensors):
             row, col = i // 2, (i % 2) * 2
             
             # Label for sensor name
             name_label = ttk.Label(sensor_grid, text=f"{sensor}:")
             name_label.grid(row=row, column=col, sticky=tk.W, padx=5, pady=2)
             
-            # Variable and label for sensor value
-            var = tk.StringVar(value="----")
-            self.sensor_vars[sensor] = var
-            value_label = ttk.Label(sensor_grid, textvariable=var, foreground="red")
+            # Variable and label for sensor value (create if doesn't exist)
+            if sensor not in self.sensor_vars:
+                self.sensor_vars[sensor] = tk.StringVar(value="----")
+            value_label = ttk.Label(sensor_grid, textvariable=self.sensor_vars[sensor], foreground="red")
             value_label.grid(row=row, column=col+1, sticky=tk.W, padx=5, pady=2)
             self.sensor_labels[sensor] = value_label
         
@@ -649,7 +801,7 @@ class RobotGUI:
         status_frame = ttk.Frame(sensor_frame)
         status_frame.pack(fill=tk.X, pady=(10, 0))
         
-        ttk.Label(status_frame, text="Sensor Status:").pack(side=tk.LEFT, padx=5)
+        ttk.Label(status_frame, text="Robot Status:").pack(side=tk.LEFT, padx=5)
         self.sensor_status_var = tk.StringVar(value="Waiting for sensor data")
         self.sensor_status_label = ttk.Label(status_frame, textvariable=self.sensor_status_var, foreground="gray")
         self.sensor_status_label.pack(side=tk.LEFT, padx=5)
@@ -721,13 +873,21 @@ class RobotGUI:
         
         ttk.Label(pipeline_controls, text="Command Pipeline:", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
         
-        # Add VILA Auto Nav Mode toggle
+        # Add VILA Auto Nav Mode toggle (push button style)
         self.vila_autonomous_var = tk.BooleanVar(value=False)
-        self.vila_autonomous_btn = ttk.Checkbutton(
+        self.vila_autonomous_btn = tk.Button(
             pipeline_controls,
-            text="VILA Auto Nav Mode",
-            variable=self.vila_autonomous_var,
-            command=self.toggle_vila_autonomous
+            text="VILA Auto Nav\nDisabled",
+            command=self.toggle_vila_autonomous,
+            font=("Arial", 9, "bold"),
+            bg="red",
+            fg="white",
+            activebackground="darkred",
+            activeforeground="white",
+            relief="raised",
+            bd=2,
+            width=12,
+            height=2
         )
         self.vila_autonomous_btn.pack(side=tk.LEFT, padx=20)
         
@@ -875,7 +1035,7 @@ class RobotGUI:
             "4. ⚙️  Command Generation → Convert to robot movement commands\n"
             "5. 🤖 Robot Execution   → Send commands to robot (if autonomous mode enabled)\n\n"
             "💡 Enable 'VILA Auto Nav Mode' to see full pipeline in action!\n"
-            "⚠️  Safety: Movement toggle must also be enabled for actual robot movement.\n\n"
+            "⚠️  Safety: Drive toggle must be ON for actual robot movement.\n\n"
             "Start an image analysis to see the pipeline...\n\n"
         )
         
@@ -1000,10 +1160,10 @@ class RobotGUI:
             
             # Mapping of sensor data keys to display names (updated per ROBOT_UNIFIED_INTEGRATION_GUIDE.md)
             sensor_mapping = {
-                'battery_voltage': ('Battery Voltage', 'volts'),
+                'battery_voltage': ('Battery', 'volts'),
                 'imu_values': ('IMU Acceleration', 'm/s²'),
-                'camera_status': ('Camera Status', 'status'),
-                'temperature': ('Orin CPU Temperature', '°C')
+                'camera_status': ('Camera', 'status'),
+                'temperature': ('Orin CPU', '°C')
             }
             
             # Track which sensors have data
@@ -1070,6 +1230,9 @@ class RobotGUI:
                     self.sio.connect(self.config.websocket_url)
                     self.update_queue.put(('connection_status', 'Connected'))
                     self.log_message("Successfully connected to robot server")
+                    
+                    # Immediately refresh robot list for single robot system
+                    self.root.after(100, self.refresh_robot_list)
                 else:
                     self.update_queue.put(('connection_status', 'Connection Failed'))
                     self.log_message(f"HTTP connection failed: {response.status_code}")
@@ -1170,9 +1333,20 @@ class RobotGUI:
                             # Auto-select the single robot for control
                             if len(robots) == 1 and not self.selected_robot_id:
                                 robot_id = robots[0]['robot_id']
+                                robot_name = robots[0].get('name', robot_id)
                                 self.selected_robot_id = robot_id
-                                self.selected_robot_var.set(robot_id)
-                                print(f"🤖 Auto-selected single robot: {robot_id}")
+                                self.selected_robot_var.set(f"{robot_name} ({robot_id})")
+                                print(f"🤖 Auto-selected single robot: {robot_name} ({robot_id})")
+                                self.log_message(f"✅ Connected to robot: {robot_name}")
+                                
+                                # Trigger immediate image capture now that robot is selected
+                                def trigger_immediate_capture():
+                                    if hasattr(self, 'capture_image_from_robot'):
+                                        print("📷 Triggering immediate image capture after robot selection")
+                                        self.capture_image_from_robot()
+                                
+                                # Delay slightly to ensure GUI is ready
+                                self.root.after(500, trigger_immediate_capture)
                         else:
                             self.robots = {}
                     
@@ -1355,6 +1529,66 @@ class RobotGUI:
                 
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load image: {str(e)}")
+
+    def capture_image_from_robot(self):
+        """Capture current image from robot's camera"""
+        if not self.selected_robot_id:
+            self.log_vila_activity("No robot selected - capture cancelled", "ERROR")
+            messagebox.showwarning("No Robot Selected", "Please select a robot first")
+            return
+        
+        def capture_worker():
+            try:
+                self.log_vila_activity("Requesting image from robot camera...", "PROCESSING")
+                
+                # Request image from robot via server
+                response = requests.get(
+                    f"{self.config.http_url}/robots/{self.selected_robot_id}/image",
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get('success') and result.get('image'):
+                        # Decode base64 image
+                        image_b64 = result['image']
+                        image_data = base64.b64decode(image_b64)
+                        image = Image.open(io.BytesIO(image_data))
+                        
+                        def update_image_display():
+                            # Store full image for analysis
+                            self.current_image = image.copy()
+                            
+                            # Update VILA thumbnail
+                            self.update_vila_thumbnail(image)
+                            
+                            # Update display placeholder
+                            display_image = image.copy()
+                            display_image.thumbnail((300, 200))
+                            photo = ImageTk.PhotoImage(display_image)
+                            
+                            self.image_label.configure(image=photo, text="")
+                            self.image_label.image = photo  # Keep reference
+                            
+                            self.log_vila_activity("✅ Image captured from robot camera", "SUCCESS")
+                            
+                        self.root.after(0, update_image_display)
+                    else:
+                        def update_error():
+                            self.log_vila_activity("❌ Robot returned no image data", "ERROR")
+                        self.root.after(0, update_error)
+                else:
+                    def update_http_error():
+                        self.log_vila_activity(f"❌ Failed to get image: HTTP {response.status_code}", "ERROR")
+                    self.root.after(0, update_http_error)
+                    
+            except Exception as e:
+                def update_exception():
+                    self.log_vila_activity(f"❌ Image capture error: {e}", "ERROR")
+                self.root.after(0, update_exception)
+        
+        # Run in background thread
+        threading.Thread(target=capture_worker, daemon=True).start()
 
     def analyze_image(self):
         """Analyze the loaded image"""
@@ -1663,15 +1897,16 @@ class RobotGUI:
     def toggle_vila_autonomous(self):
         """Toggle VILA auto navigation mode"""
         try:
-            autonomous_enabled = self.vila_autonomous_var.get()
+            # Manually toggle the state for push button behavior
+            current_state = self.vila_autonomous_var.get()
+            new_state = not current_state
             
             # 🛡️ CRITICAL SAFETY: Prevent enabling VILA autonomous when movement is disabled
-            if autonomous_enabled and not self.movement_enabled:
+            if new_state and not self.movement_enabled:
                 self.log_movement_activity("🚫 SAFETY BLOCK: Cannot enable VILA autonomous mode - movement is disabled", "SAFETY")
                 self.log_pipeline_activity("🛡️ Enable movement first before activating VILA autonomous mode", "SAFETY")
-                # Reset the checkbox to disabled
-                self.vila_autonomous_var.set(False)
-                autonomous_enabled = False
+                # Don't change state - keep it disabled
+                new_state = False
                 # Show warning message
                 messagebox.showwarning(
                     "Safety Block", 
@@ -1679,21 +1914,35 @@ class RobotGUI:
                     "Please enable movement first, then activate VILA autonomous mode."
                 )
             
-            self.vila_autonomous = autonomous_enabled
+            # Update the variables
+            self.vila_autonomous_var.set(new_state)
+            self.vila_autonomous = new_state
             
-            # Update button text - show current state
-            if autonomous_enabled:
-                self.vila_autonomous_btn.configure(text="VILA Auto Nav Mode\n✅ Enabled")
+            # Update button appearance - VILA Auto Nav Enabled/Disabled with colors
+            if new_state:
+                self.vila_autonomous_btn.configure(
+                    text="VILA Auto Nav\nEnabled",
+                    bg="green",
+                    fg="white",
+                    activebackground="darkgreen",
+                    activeforeground="white"
+                )
             else:
-                self.vila_autonomous_btn.configure(text="VILA Auto Nav Mode\n❌ Disabled")
+                self.vila_autonomous_btn.configure(
+                    text="VILA Auto Nav\nDisabled",
+                    bg="red",
+                    fg="white",
+                    activebackground="darkred",
+                    activeforeground="white"
+                )
             
             # Log the change
-            status = "Enabled" if autonomous_enabled else "Disabled"
+            status = "Enabled" if new_state else "Disabled"
             self.log_pipeline_activity(f"🤖 VILA Auto Nav Mode {status}", "SYSTEM")
-            if autonomous_enabled:
+            if new_state:
                 self.log_pipeline_activity(
                     "⚠️ VILA can now generate and execute robot navigation commands automatically\n"
-                    "🛡️ Safety: Movement toggle must still be enabled for actual movement\n"
+                    "🛡️ Safety: Drive toggle must ON for actual movement\n"
                     "🎯 Navigation commands will be executed when image analysis detects actionable scenarios", 
                     "SYSTEM"
                 )
@@ -1998,20 +2247,38 @@ class RobotGUI:
     def toggle_vila_model(self):
         """Toggle VILA model enable/disable"""
         try:
-            toggle_value = self.vila_enabled_var.get()
-            self.vila_enabled = toggle_value
+            # Manually toggle the state for push button behavior
+            current_state = self.vila_enabled_var.get()
+            new_state = not current_state
+            self.vila_enabled_var.set(new_state)
+            self.vila_enabled = new_state
             
             status = "Enabled" if self.vila_enabled else "Disabled"
             
             # Debug logging
-            print(f"🤖 VILA TOGGLE: {status} - toggle_var: {toggle_value}, vila_enabled: {self.vila_enabled}")
+            print(f"🤖 VILA TOGGLE: {status} - toggle_var: {new_state}, vila_enabled: {self.vila_enabled}")
             
             # Log to VILA activity display
-            vila_msg = f"VILA model toggle changed: {status} (enabled:{self.vila_enabled}, toggle:{toggle_value})"
+            vila_msg = f"VILA model toggle changed: {status} (enabled:{self.vila_enabled}, toggle:{new_state})"
             self.log_vila_activity(vila_msg, "PROCESSING")
             
-            # Update button text
-            self.vila_toggle_btn.configure(text=f"VILA Model\n{status}")
+            # Update button appearance - VILA Model Enabled/Disabled with colors
+            if self.vila_enabled:
+                self.vila_toggle_btn.configure(
+                    text="VILA Model\nEnabled",
+                    bg="green",
+                    fg="white",
+                    activebackground="darkgreen",
+                    activeforeground="white"
+                )
+            else:
+                self.vila_toggle_btn.configure(
+                    text="VILA Model\nDisabled",
+                    bg="red",
+                    fg="white",
+                    activebackground="darkred",
+                    activeforeground="white"
+                )
             
             # Update status display
             self.vila_model_status_var.set("Processing...")
@@ -2060,7 +2327,23 @@ class RobotGUI:
                                 # Reset toggle state on failure
                                 self.vila_enabled_var.set(not self.vila_enabled)
                                 self.vila_enabled = not self.vila_enabled
-                                self.vila_toggle_btn.configure(text=f"VILA Model\n{'Enabled' if self.vila_enabled else 'Disabled'}")
+                                # Update button appearance on failure reset
+                                if self.vila_enabled:
+                                    self.vila_toggle_btn.configure(
+                                        text="VILA Model\nEnabled",
+                                        bg="green",
+                                        fg="white",
+                                        activebackground="darkgreen",
+                                        activeforeground="white"
+                                    )
+                                else:
+                                    self.vila_toggle_btn.configure(
+                                        text="VILA Model\nDisabled",
+                                        bg="red",
+                                        fg="white",
+                                        activebackground="darkred",
+                                        activeforeground="white"
+                                    )
                         
                         self.root.after(0, update_vila_status)
                     else:
@@ -2382,6 +2665,102 @@ class RobotGUI:
         sensor_thread.start()
         print("📊 Started sensor data polling (every 5 seconds)")
     
+    def start_periodic_image_capture(self):
+        """Start periodic image capture for VILA thumbnail updates"""
+        def periodic_image_capture():
+            print("📷 Periodic image capture thread started")
+            while True:
+                try:
+                    time.sleep(10)  # Capture image every 10 seconds
+                    
+                    # Check if we have all required components
+                    if not (hasattr(self, 'config') and self.config):
+                        print("📷 Waiting for server config...")
+                        continue
+                        
+                    if not (hasattr(self, 'selected_robot_id') and self.selected_robot_id):
+                        print("📷 Waiting for robot selection...")
+                        continue
+                    
+                    print(f"📷 Requesting image from robot {self.selected_robot_id}")
+                    
+                    # Request image from robot via server
+                    response = requests.get(
+                        f"{self.config.http_url}/robots/{self.selected_robot_id}/image",
+                        timeout=5
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get('success') and result.get('image'):
+                            print("📷 Successfully received image from robot")
+                            # Decode base64 image
+                            image_b64 = result['image']
+                            image_data = base64.b64decode(image_b64)
+                            image = Image.open(io.BytesIO(image_data))
+                            
+                            # Update VILA thumbnail (but not the analysis image placeholder)
+                            def update_vila_thumbnail_only():
+                                self.update_vila_thumbnail(image)
+                                # Store as current image for potential analysis
+                                self.current_image = image.copy()
+                                print("📷 VILA thumbnail updated from periodic capture")
+                            
+                            self.root.after(0, update_vila_thumbnail_only)
+                        else:
+                            print(f"📷 Robot returned no image data: {result}")
+                    else:
+                        print(f"📷 Failed to get image: HTTP {response.status_code}")
+                        
+                except Exception as e:
+                    print(f"📷 Periodic image capture error: {e}")
+                    time.sleep(30)  # Wait longer on error
+        
+        image_thread = threading.Thread(target=periodic_image_capture, daemon=True)
+        image_thread.start()
+        print("📷 Started periodic image capture (every 10 seconds, starting in 6 seconds)")
+    
+    def start_periodic_vila_auto_nav(self):
+        """Start periodic VILA analysis for auto navigation when enabled"""
+        def periodic_vila_auto_nav():
+            print("🤖 Periodic VILA auto navigation thread started")
+            while True:
+                try:
+                    time.sleep(15)  # Analyze every 15 seconds for auto navigation
+                    
+                    # Check if auto navigation is enabled and all requirements are met
+                    if not (hasattr(self, 'vila_autonomous') and self.vila_autonomous):
+                        continue  # Skip if auto nav is disabled
+                        
+                    if not (hasattr(self, 'vila_enabled') and self.vila_enabled):
+                        print("🤖 Auto nav: Waiting for VILA to be enabled...")
+                        continue
+                        
+                    if not (hasattr(self, 'movement_enabled') and self.movement_enabled):
+                        print("🤖 Auto nav: Waiting for movement to be enabled...")
+                        continue
+                        
+                    if not (hasattr(self, 'selected_robot_id') and self.selected_robot_id):
+                        print("🤖 Auto nav: Waiting for robot selection...")
+                        continue
+                    
+                    print(f"🤖 Auto nav: Requesting VILA analysis for robot {self.selected_robot_id}")
+                    
+                    # Trigger VILA analysis for navigation
+                    def trigger_analysis():
+                        self.log_pipeline_activity("🚀 Auto Navigation: Triggering VILA analysis...", "AUTO_NAV")
+                        self.request_vila_analysis()
+                    
+                    self.root.after(0, trigger_analysis)
+                    
+                except Exception as e:
+                    print(f"🤖 Periodic VILA auto nav error: {e}")
+                    time.sleep(30)  # Wait longer on error
+        
+        auto_nav_thread = threading.Thread(target=periodic_vila_auto_nav, daemon=True)
+        auto_nav_thread.start()
+        print("🤖 Started periodic VILA auto navigation (every 15 seconds when enabled)")
+    
     def request_vila_analysis(self):
         """Request VILA analysis using pull-based image system"""
         def analysis_worker():
@@ -2397,6 +2776,18 @@ class RobotGUI:
                     result = response.json()
                     def update_analysis_result():
                         self.log_movement_activity("✅ Pull-based VILA analysis completed", "INFO")
+                        
+                        # If the result contains an image, update the VILA thumbnail
+                        if result.get('image_used'):
+                            try:
+                                image_b64 = result['image_used']
+                                image_data = base64.b64decode(image_b64)
+                                image = Image.open(io.BytesIO(image_data))
+                                self.update_vila_thumbnail(image)
+                                self.log_vila_activity("✅ VILA thumbnail updated from pull-based analysis", "SUCCESS")
+                            except Exception as img_error:
+                                self.log_vila_activity(f"⚠️ Could not update thumbnail: {img_error}", "WARNING")
+                        
                         # The analysis result will be processed by the existing VILA activity monitoring
                     self.root.after(0, update_analysis_result)
                 else:

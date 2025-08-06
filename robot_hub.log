@@ -9972,3 +9972,356 @@
 2025-08-06 14:20:34,228 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
 2025-08-06 14:20:34,228 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
 2025-08-06 14:20:39,130 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:01:55,773 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:01:55,773 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:01:55,773 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:01:55,773 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:01:55,773 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:01:55,774 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:01:55,774 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:01:55,774 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:01:55,774 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:01:55,774 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:01:55,774 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:01:55,774 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:01:55,774 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:01:59,249 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:02:11,548 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 17:02:15,942 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 17:02:25,377 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 17:02:25,377 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:11:40,588 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:11:40,588 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:11:40,588 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:11:40,588 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:11:40,588 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:11:40,589 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:11:40,589 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:11:40,589 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:11:40,589 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:11:40,589 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:11:40,589 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:11:40,589 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:11:40,589 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:11:45,772 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 17:11:48,760 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 17:11:52,873 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 17:11:52,873 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:11:52,874 - VILARobotHub - INFO - ⏸️ VILA model disabled
+2025-08-06 17:22:47,442 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:22:47,442 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:22:47,442 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:22:47,442 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:22:47,442 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:22:47,443 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:22:47,443 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:22:47,443 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:22:47,443 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:22:47,443 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:22:47,443 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:22:47,443 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:22:47,443 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:22:52,345 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:23:02,344 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 17:23:05,329 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 17:23:09,429 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 17:23:09,429 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:23:12,886 - VILARobotHub - INFO - ⏸️ VILA model disabled
+2025-08-06 17:23:15,804 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:26:40,779 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:26:40,780 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:26:40,780 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:26:40,780 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:26:40,780 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:26:40,780 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:26:40,780 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:26:40,780 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:26:40,780 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:26:40,780 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:26:40,780 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:26:40,780 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:26:40,780 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:26:45,690 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:26:56,101 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 17:26:59,053 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 17:27:03,189 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 17:27:03,189 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:27:09,593 - VILARobotHub - INFO - ⏸️ VILA model disabled
+2025-08-06 17:27:22,809 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:27:25,630 - VILARobotHub - INFO - ⏸️ VILA model disabled
+2025-08-06 17:28:37,668 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:28:37,668 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:28:37,669 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:28:37,669 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:28:37,669 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:28:37,669 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:28:37,669 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:28:37,669 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:28:37,669 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:28:37,669 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:28:37,669 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:28:37,669 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:28:37,669 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:28:42,589 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:28:44,595 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 17:28:47,560 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 17:28:51,708 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 17:28:51,708 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:28:51,710 - VILARobotHub - INFO - ⏸️ VILA model disabled
+2025-08-06 17:29:10,729 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:29:22,658 - VILARobotHub - INFO - ⏸️ VILA model disabled
+2025-08-06 17:31:04,773 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:31:04,773 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:31:04,773 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:31:04,773 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:31:04,773 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:31:04,774 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:31:04,774 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:31:04,774 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:31:04,774 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:31:04,774 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:31:04,774 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:31:04,774 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:31:04,774 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:31:09,684 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:31:11,593 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 17:31:15,546 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 17:31:19,572 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 17:31:19,572 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:31:25,854 - VILARobotHub - INFO - ⏸️ VILA model disabled
+2025-08-06 17:33:50,399 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:33:50,399 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:33:50,399 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:33:50,399 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:33:50,399 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:33:50,399 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:33:50,399 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:33:50,399 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:33:50,399 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:33:50,399 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:33:50,400 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:33:50,400 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:33:50,400 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:33:55,262 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:34:08,099 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 17:34:11,061 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 17:34:15,195 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 17:34:15,195 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:37:46,096 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:37:51,006 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:38:01,336 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 17:38:04,412 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 17:38:08,562 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 17:38:08,562 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:41:21,222 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:41:21,223 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:41:21,223 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:41:21,223 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:41:21,223 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:41:21,223 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:41:21,223 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:41:21,223 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:41:21,223 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:41:21,223 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:41:21,223 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:41:21,223 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:41:21,223 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:41:26,082 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:42:20,338 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 17:42:23,374 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 17:42:27,476 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 17:42:27,476 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:47:07,757 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:47:07,757 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:47:07,757 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:47:07,758 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:47:07,758 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:47:07,758 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:47:07,758 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:47:07,758 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:47:07,758 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:47:07,758 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:47:07,758 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:47:07,758 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:47:07,758 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:47:12,664 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:48:00,822 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:48:00,823 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:48:00,823 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:48:00,823 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:48:00,823 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:48:00,823 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:48:00,823 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:48:00,823 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:48:00,823 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:48:00,823 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:48:00,823 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:48:00,824 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:48:00,824 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:48:05,709 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:49:06,935 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:49:06,935 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:49:06,935 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:49:06,935 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:49:06,935 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:49:06,936 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:49:06,936 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:49:06,936 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:49:06,936 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:49:06,936 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:49:06,936 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:49:06,936 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:49:06,936 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:49:11,800 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:50:01,677 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 17:50:04,679 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 17:50:08,781 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 17:50:08,781 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 17:50:22,904 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 17:52:05,887 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 17:52:10,770 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 17:53:27,308 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 17:53:30,469 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 17:53:34,594 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 17:53:34,594 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 18:01:12,858 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 18:01:12,858 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 18:01:12,858 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 18:01:12,858 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 18:01:12,858 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 18:01:12,859 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 18:01:12,859 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 18:01:12,859 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 18:01:12,859 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 18:01:12,859 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 18:01:12,859 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 18:01:12,859 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 18:01:12,859 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 18:01:17,699 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 18:01:28,731 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 18:01:32,154 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 18:01:36,343 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 18:01:36,343 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 18:06:43,204 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 18:06:48,020 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 18:06:59,665 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 18:07:02,757 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 18:07:06,970 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 18:07:06,971 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 18:10:30,109 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 18:10:30,109 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 18:10:30,109 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 18:10:30,109 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 18:10:30,109 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 18:10:30,109 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 18:10:30,109 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 18:10:30,109 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 18:10:30,109 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 18:10:30,109 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 18:10:30,109 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 18:10:30,109 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 18:10:30,110 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 18:10:34,967 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 18:10:46,645 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 18:10:49,762 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 18:10:53,909 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 18:10:53,909 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 18:11:36,927 - VILARobotHub - INFO - 🤖 Robot yahboomcar_x3_01: VILA analysis request processed (image: 288,427 bytes)
+2025-08-06 18:11:36,927 - VILARobotHub - INFO - 📝 VILA analysis complete for robot yahboomcar_x3_01 - awaiting GUI command processing
+2025-08-06 18:11:36,927 - VILARobotHub - INFO - 🔒 Robot yahboomcar_x3_01: VILA analysis queued for GUI processing
+2025-08-06 18:11:37,080 - VILARobotHub - INFO - ✅ VILA analysis vila_analysis_yahboomcar_x3_01_1754518296 marked as processed by GUI
+2025-08-06 18:11:37,083 - VILARobotHub - INFO - ✅ NON-MOVEMENT: Executing stop command for robot yahboomcar_x3_01
+2025-08-06 18:11:37,083 - VILARobotHub - INFO -    └── Source: HTTP_API
+2025-08-06 18:11:37,083 - VILARobotHub - INFO - ✅ COMMAND QUEUED: stop for robot yahboomcar_x3_01
+2025-08-06 18:11:37,084 - VILARobotHub - INFO -    └── Robot will receive this command when it polls GET /commands
+2025-08-06 18:11:37,084 - VILARobotHub - INFO -    └── Queue now has 1 pending commands
+2025-08-06 18:11:37,084 - VILARobotHub - INFO - 📤 DIRECT COMMAND SENT: Command stop sent directly to robot yahboomcar_x3_01
+2025-08-06 18:11:37,084 - VILARobotHub - INFO - ✅ HTTP API: Command executed successfully - Command stop sent directly to robot yahboomcar_x3_01
+2025-08-06 18:13:32,148 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 18:13:32,148 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 18:13:32,148 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 18:13:32,148 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 18:13:32,148 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 18:13:32,148 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 18:13:32,148 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 18:13:32,149 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 18:13:32,149 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 18:13:32,149 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 18:13:32,149 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 18:13:32,149 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 18:13:32,149 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 18:13:36,998 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 18:13:47,525 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 18:13:50,636 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 18:13:54,829 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 18:13:54,829 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 18:16:22,296 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 18:16:22,296 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 18:16:22,296 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 18:16:22,296 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 18:16:22,296 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 18:16:22,296 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 18:16:22,296 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 18:16:22,297 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 18:16:22,297 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 18:16:22,297 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 18:16:22,297 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 18:16:22,297 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 18:16:22,297 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 18:16:37,192 - VILARobotHub - INFO - 🚀 Starting VILA Robot Vision Hub...
+2025-08-06 18:16:37,193 - VILARobotHub - INFO - Initializing VILA service...
+2025-08-06 18:16:37,193 - VILARobotHub - INFO - 🚀 VILA Robot Hub starting...
+2025-08-06 18:16:37,193 - VILARobotHub - INFO - ✅ VILA service ready (model not loaded - use GUI to enable)
+2025-08-06 18:16:37,193 - VILARobotHub - INFO - 🎯 Single robot system initialized - HTTP/WebSocket communication only
+2025-08-06 18:16:37,193 - VILARobotHub - INFO - 🔋 Robot yahboomcar_x3_01 registered with battery level: 100.0%
+2025-08-06 18:16:37,193 - VILARobotHub - INFO - Robot yahboomcar_x3_01 registered successfully
+2025-08-06 18:16:37,193 - VILARobotHub - INFO - ✅ Pre-registered robot: yahboomcar_x3_01 @ 192.168.1.166
+2025-08-06 18:16:37,193 - VILARobotHub - INFO - ✅ VILA Robot Hub ready!
+2025-08-06 18:16:37,193 - VILARobotHub - INFO - 🌐 HTTP/WebSocket server starting on port 5000
+2025-08-06 18:16:37,193 - VILARobotHub - INFO - 📡 WebSocket enabled for real-time communication
+2025-08-06 18:16:37,193 - VILARobotHub - INFO - 🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication
+2025-08-06 18:16:37,193 - VILARobotHub - INFO - 🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)
+2025-08-06 18:16:42,057 - engineio.server - ERROR - Invalid session vH4AP6jG3zd1NgoVAAAA (further occurrences of this error will be logged with level INFO)
+2025-08-06 18:16:42,058 - VILARobotHub - INFO - WebSocket client connected
+2025-08-06 18:16:52,019 - VILARobotHub - INFO - 🚀 Loading VILA model...
+2025-08-06 18:16:55,222 - accelerate.utils.modeling - INFO - We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2025-08-06 18:16:59,401 - VILARobotHub - INFO - ✅ VILA model loaded successfully
+2025-08-06 18:16:59,401 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 18:17:22,607 - VILARobotHub - INFO - ✅ VILA model enabled and ready
+2025-08-06 18:17:25,432 - VILARobotHub - INFO - 🚀 Loading VILA model...
