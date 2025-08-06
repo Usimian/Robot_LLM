@@ -13,8 +13,7 @@ import json
 import logging
 import configparser
 import queue
-import socket
-import struct
+import requests
 from datetime import datetime
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Any
@@ -146,26 +145,115 @@ class RobotManager:
         with self.lock:
             return list(self.robots.values())
     
-    def send_command(self, robot_id: str, command: RobotCommand) -> bool:
-        """Send command to robot with safety validation"""
-        try:
-            # CRITICAL SAFETY: Block movement commands at the robot manager level
-            movement_commands = ['move', 'turn', 'forward', 'backward', 'left', 'right']
-            if command.command_type in movement_commands:
-                logger.warning(f"🚫 ROBOT MANAGER SAFETY BLOCK: Movement command '{command.command_type}' rejected")
-                logger.warning(f"   └── All movement commands are now blocked at robot manager level")
-                logger.warning(f"   └── Only GUI with proper safety confirmation can send movement commands")
-                return False
+    def execute_command(self, robot_id: str, command: RobotCommand, safety_confirmed: bool = False, gui_movement_enabled: bool = False, source: str = "unknown") -> tuple[bool, str]:
+        """
+        🛡️ SINGLE COMMAND GATEWAY - ALL robot commands MUST go through this method
+        
+        This is the ONLY method that can send commands to robots. All other methods
+        must call this one to ensure consistent safety validation.
+        
+        Args:
+            robot_id: Target robot ID
+            command: Command to execute
+            safety_confirmed: True if GUI has confirmed safety
+            gui_movement_enabled: True if GUI movement is enabled
+            source: Source of the command (for logging)
             
-            if robot_id in self.command_queues:
-                self.command_queues[robot_id].put(command)
-                logger.info(f"Command sent to robot {robot_id}: {command.command_type}")
-                return True
-            return False
+        Returns:
+            (success: bool, message: str)
+        """
+        try:
+            # 🚨 CRITICAL SAFETY VALIDATION - This is the ONLY place commands are validated
+            movement_commands = ['move', 'turn', 'forward', 'backward', 'left', 'right']
+            
+            if command.command_type in movement_commands:
+                # Movement command - requires explicit safety confirmation
+                if not safety_confirmed:
+                    error_msg = f"Movement command '{command.command_type}' rejected - no safety confirmation"
+                    logger.warning(f"🚫 COMMAND GATEWAY BLOCK: {error_msg}")
+                    logger.warning(f"   └── Source: {source}")
+                    logger.warning(f"   └── Robot: {robot_id}")
+                    return False, error_msg
+                    
+                if not gui_movement_enabled:
+                    error_msg = f"Movement command '{command.command_type}' rejected - GUI movement disabled"
+                    logger.warning(f"🚫 COMMAND GATEWAY BLOCK: {error_msg}")
+                    logger.warning(f"   └── Source: {source}")
+                    logger.warning(f"   └── Robot: {robot_id}")
+                    return False, error_msg
+                    
+                logger.info(f"✅ SAFE MOVEMENT: Executing {command.command_type} command for robot {robot_id}")
+                logger.info(f"   └── Source: {source} (with safety confirmation)")
+            else:
+                # Non-movement command - always allowed
+                logger.info(f"✅ NON-MOVEMENT: Executing {command.command_type} command for robot {robot_id}")
+                logger.info(f"   └── Source: {source}")
+            
+            # Check if robot exists 
+            if robot_id not in self.command_queues:
+                error_msg = f"Robot {robot_id} not found in command queues"
+                logger.error(f"❌ COMMAND GATEWAY ERROR: {error_msg}")
+                return False, error_msg
+                
+            # 🎯 SINGLE POINT OF ROBOT COMMUNICATION
+            # This is THE ONLY place in the entire system that communicates with robots
+            success = self._send_command_to_physical_robot(robot_id, command)
+            
+            if success:
+                success_msg = f"Command {command.command_type} sent directly to robot {robot_id}"
+                logger.info(f"📤 DIRECT COMMAND SENT: {success_msg}")
+                return True, success_msg
+            else:
+                error_msg = f"Failed to send command {command.command_type} to robot {robot_id}"
+                logger.error(f"❌ DIRECT COMMAND FAILED: {error_msg}")
+                return False, error_msg
+            
         except Exception as e:
-            logger.error(f"Failed to send command to robot {robot_id}: {e}")
+            error_msg = f"Command gateway error: {str(e)}"
+            logger.error(f"💥 COMMAND GATEWAY EXCEPTION: {error_msg}")
+            logger.error(f"   └── Robot: {robot_id}, Command: {command.command_type}, Source: {source}")
+            return False, error_msg
+
+    def _send_command_to_physical_robot(self, robot_id: str, command: RobotCommand) -> bool:
+        """
+        🎯 THE SINGLE POINT where ALL robot communication happens
+        
+        This is the ONLY method in the entire system that actually sends data to robots.
+        Every command from GUI, API, ROS, WebSocket - EVERYTHING goes through here.
+        """
+        try:
+            robot = self.get_robot(robot_id)
+            if not robot:
+                logger.error(f"❌ Robot {robot_id} not found for physical communication")
+                return False
+                
+            # Convert our command format to robot's expected format
+            robot_command = {
+                'type': command.command_type,
+                'parameters': command.parameters,
+                'timestamp': command.timestamp.isoformat(),
+                'priority': command.priority
+            }
+            
+            # 🎯 SINGLE ROBOT SYSTEM: Queue-based communication
+            # Robot polls for commands - we don't send directly to robot
+            
+            # Add command to robot's queue for polling
+            if robot_id not in self.command_queues:
+                logger.error(f"❌ Robot {robot_id} not found in command queues")
+                return False
+                
+            self.command_queues[robot_id].put(command)
+            logger.info(f"✅ COMMAND QUEUED: {command.command_type} for robot {robot_id}")
+            logger.info(f"   └── Robot will receive this command when it polls GET /commands")
+            logger.info(f"   └── Queue now has {self.command_queues[robot_id].qsize()} pending commands")
+            
+            return True
+                
+        except Exception as e:
+            logger.error(f"💥 PHYSICAL ROBOT: Communication error with {robot_id}: {e}")
             return False
-    
+
     def get_pending_commands(self, robot_id: str) -> List[RobotCommand]:
         """Get pending commands for robot"""
         commands = []
@@ -185,8 +273,6 @@ class RobotVILAService:
         self.model_loaded = False
         self.model_enabled = False  # New: separate enabled state from loaded
         self.robot_manager = RobotManager()
-        self.tcp_server = None
-        self.tcp_thread = None
         
     def initialize(self):
         """Initialize VILA model and services (but don't auto-enable)"""
@@ -194,9 +280,39 @@ class RobotVILAService:
         # Don't auto-load model on initialization - wait for enable command
         logger.info("✅ VILA service ready (model not loaded - use GUI to enable)")
         
-        # Start TCP server for direct robot communication
-        self.start_tcp_server()
+        # Single robot system uses HTTP-only communication
+        logger.info("🎯 Single robot system initialized - HTTP/WebSocket communication only")
+        
+        # Pre-register the single robot from config
+        self._register_configured_robot()
         return True
+    
+    def _register_configured_robot(self):
+        """Pre-register the single robot from configuration"""
+        try:
+            config = configparser.ConfigParser()
+            config.read('robot_hub_config.ini')
+            
+            robot_info = {
+                'robot_id': config.get('ROBOT', 'robot_id', fallback='yahboomcar_x3_01'),
+                'name': config.get('ROBOT', 'robot_name', fallback='YahBoom Car X3'),
+                'capabilities': ['navigation', 'camera', 'autonomous'],
+                'connection_type': 'http_polling',
+                'position': {
+                    'x': 0.0, 'y': 0.0, 'z': 0.0, 'heading': 0.0,
+                    'ip': config.get('ROBOT', 'robot_ip', fallback='192.168.1.166')
+                },
+                'battery_level': 100.0  # Will be updated when robot sends real data
+            }
+            
+            success = self.robot_manager.register_robot(robot_info)
+            if success:
+                logger.info(f"✅ Pre-registered robot: {robot_info['robot_id']} @ {robot_info['position']['ip']}")
+            else:
+                logger.error("❌ Failed to pre-register configured robot")
+                
+        except Exception as e:
+            logger.error(f"❌ Error pre-registering robot: {e}")
     
     def enable_vila_model(self):
         """Enable and load VILA model"""
@@ -252,113 +368,6 @@ class RobotVILAService:
             'device': self.vila_model.device if self.model_loaded else 'N/A'
         }
     
-    def start_tcp_server(self, port=9999):
-        """Start TCP server for direct robot communication"""
-        def tcp_server_worker():
-            try:
-                self.tcp_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.tcp_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                self.tcp_server.bind(('0.0.0.0', port))
-                self.tcp_server.listen(5)
-                logger.info(f"🌐 TCP server listening on port {port}")
-                
-                while True:
-                    client_socket, address = self.tcp_server.accept()
-                    logger.info(f"TCP connection from {address}")
-                    
-                    # Handle client in separate thread
-                    client_thread = threading.Thread(
-                        target=self.handle_tcp_client,
-                        args=(client_socket, address),
-                        daemon=True
-                    )
-                    client_thread.start()
-                    
-            except Exception as e:
-                logger.error(f"TCP server error: {e}")
-        
-        self.tcp_thread = threading.Thread(target=tcp_server_worker, daemon=True)
-        self.tcp_thread.start()
-    
-    def handle_tcp_client(self, client_socket, address):
-        """Handle TCP client connections"""
-        try:
-            while True:
-                # Receive message length (4 bytes)
-                length_data = client_socket.recv(4)
-                if not length_data:
-                    break
-                
-                message_length = struct.unpack('!I', length_data)[0]
-                
-                # Receive message
-                message_data = b''
-                while len(message_data) < message_length:
-                    chunk = client_socket.recv(message_length - len(message_data))
-                    if not chunk:
-                        break
-                    message_data += chunk
-                
-                # Process message
-                try:
-                    message = json.loads(message_data.decode('utf-8'))
-                    response = self.process_tcp_message(message)
-                    
-                    # Send response
-                    response_data = json.dumps(response).encode('utf-8')
-                    response_length = struct.pack('!I', len(response_data))
-                    client_socket.send(response_length + response_data)
-                    
-                except json.JSONDecodeError:
-                    logger.error("Invalid JSON received via TCP")
-                    
-        except Exception as e:
-            logger.error(f"TCP client error: {e}")
-        finally:
-            client_socket.close()
-            logger.info(f"TCP connection closed: {address}")
-    
-    def process_tcp_message(self, message: Dict) -> Dict:
-        """Process TCP message from robot"""
-        try:
-            msg_type = message.get('type')
-            
-            if msg_type == 'register':
-                success = self.robot_manager.register_robot(message.get('robot_info', {}))
-                return {'success': success, 'message': 'Robot registered'}
-            
-            elif msg_type == 'analyze_image':
-                # Handle image analysis
-                robot_id = message.get('robot_id')
-                image_data = base64.b64decode(message.get('image', ''))
-                image = Image.open(io.BytesIO(image_data))
-                prompt = message.get('prompt', 'Analyze this environment for robot navigation')
-                
-                response = self.vila_model.generate_response(prompt=prompt, image=image)
-                commands = self.parse_navigation_response(response)
-                
-                return {
-                    'success': True,
-                    'analysis': response,
-                    'commands': commands,
-                    'timestamp': time.time()
-                }
-            
-            elif msg_type == 'get_commands':
-                robot_id = message.get('robot_id')
-                commands = self.robot_manager.get_pending_commands(robot_id)
-                return {
-                    'success': True,
-                    'commands': [asdict(cmd) for cmd in commands]
-                }
-            
-            else:
-                return {'success': False, 'error': 'Unknown message type'}
-                
-        except Exception as e:
-            logger.error(f"Error processing TCP message: {e}")
-            return {'success': False, 'error': str(e)}
-    
     def parse_navigation_response(self, response):
         """Parse VILA response to extract robot commands"""
         response_lower = response.lower()
@@ -411,34 +420,23 @@ def health_check():
         'timestamp': time.time()
     })
 
-@app.route('/robots', methods=['GET'])
-def list_robots():
-    """List all registered robots"""
-    robots = vila_service.robot_manager.get_all_robots()
-    return jsonify({
-        'success': True,
-        'robots': [asdict(robot) for robot in robots],
-        'count': len(robots)
-    })
+@app.route('/robot', methods=['GET'])
+def get_robot():
+    """Get the single robot status"""
+    config = configparser.ConfigParser()
+    config.read('robot_hub_config.ini')
+    robot_id = config.get('ROBOT', 'robot_id', fallback='yahboomcar_x3_01')
+    
+    robot = vila_service.robot_manager.get_robot(robot_id)
+    if robot:
+        return jsonify({
+            'success': True,
+            'robot': asdict(robot)
+        })
+    else:
+        return jsonify({'success': False, 'error': 'Robot not found'}), 404
 
-@app.route('/robots/register', methods=['POST'])
-def register_robot():
-    """Register a new robot"""
-    try:
-        data = request.get_json()
-        success = vila_service.robot_manager.register_robot(data)
-        
-        if success:
-            return jsonify({
-                'success': True,
-                'message': 'Robot registered successfully',
-                'robot_id': data.get('robot_id')
-            })
-        else:
-            return jsonify({'success': False, 'error': 'Failed to register robot'}), 400
-            
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+# Robot registration endpoint removed - single robot system uses hardcoded configuration
 
 @app.route('/robots/<robot_id>/status', methods=['GET', 'POST'])
 def robot_status(robot_id):
@@ -469,86 +467,200 @@ def robot_status(robot_id):
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/robots/<robot_id>/sensors', methods=['POST'])
-def update_robot_sensors(robot_id):
-    """Update robot sensor data"""
+@app.route('/robots/<robot_id>/sensors', methods=['GET', 'POST'])
+def robot_sensors(robot_id):
+    """Get or update robot sensor data"""
+    if request.method == 'GET':
+        # CLIENT-INITIATED: Get current sensor data from robot
+        try:
+            robot = vila_service.robot_manager.get_robot(robot_id)
+            if not robot:
+                return jsonify({'success': False, 'error': 'Robot not found'}), 404
+            
+            # For single robot system, request sensor data directly from robot
+            config = configparser.ConfigParser()
+            config.read('robot_hub_config.ini')
+            robot_ip = config.get('ROBOT', 'robot_ip', fallback='192.168.1.166')
+            robot_port = config.get('ROBOT', 'robot_port', fallback='8080')
+            
+            try:
+                # Request sensor data from robot
+                response = requests.get(
+                    f"http://{robot_ip}:{robot_port}/sensors",
+                    timeout=3
+                )
+                
+                if response.status_code == 200:
+                    sensor_data = response.json()
+                    
+                    # Update our stored sensor data
+                    updates = {
+                        'sensor_data': sensor_data,
+                        'last_seen': datetime.now()
+                    }
+                    vila_service.robot_manager.update_robot_status(robot_id, updates)
+                    
+                    return jsonify({
+                        'success': True,
+                        'robot_id': robot_id,
+                        'sensor_data': sensor_data,
+                        'timestamp': time.time()
+                    })
+                else:
+                    # Fallback to stored data if robot doesn't respond
+                    stored_data = robot.sensor_data or {}
+                    return jsonify({
+                        'success': True,
+                        'robot_id': robot_id,
+                        'sensor_data': stored_data,
+                        'timestamp': time.time(),
+                        'note': 'Using cached data - robot not responding'
+                    })
+                    
+            except requests.exceptions.RequestException:
+                # Robot not responding, return stored data
+                stored_data = robot.sensor_data or {}
+                return jsonify({
+                    'success': True,
+                    'robot_id': robot_id,
+                    'sensor_data': stored_data,
+                    'timestamp': time.time(),
+                    'note': 'Using cached data - robot not reachable'
+                })
+                
+        except Exception as e:
+            logger.error(f"Error getting sensors for robot {robot_id}: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    
+    elif request.method == 'POST':
+        # ROBOT-INITIATED: Robot reporting sensor data (legacy support)
+        try:
+            data = request.get_json()
+            sensor_data = data.get('sensor_data', {})
+            
+            # Update robot sensor data
+            robot = vila_service.robot_manager.get_robot(robot_id)
+            if not robot:
+                return jsonify({'success': False, 'error': 'Robot not found'}), 404
+            
+            # Log significant sensor updates
+            if 'battery_voltage' in sensor_data:
+                logger.info(f"🔋 Robot {robot_id} battery voltage: {sensor_data['battery_voltage']:.2f}V")
+            
+            # Update sensor data and last seen time
+            updates = {
+                'sensor_data': sensor_data,
+                'last_seen': datetime.now()
+            }
+            
+            success = vila_service.robot_manager.update_robot_status(robot_id, updates)
+            
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': 'Sensor data updated'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to update sensors'}), 500
+                
+        except Exception as e:
+            logger.error(f"Error updating sensors for robot {robot_id}: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/robots/<robot_id>/image', methods=['GET'])
+def get_robot_image(robot_id):
+    """Get current image from robot"""
     try:
-        data = request.get_json()
-        sensor_data = data.get('sensor_data', {})
-        
-        # Update robot sensor data
         robot = vila_service.robot_manager.get_robot(robot_id)
         if not robot:
             return jsonify({'success': False, 'error': 'Robot not found'}), 404
         
-        # Log significant sensor updates
-        if 'battery_voltage' in sensor_data:
-            logger.info(f"🔋 Robot {robot_id} battery voltage: {sensor_data['battery_voltage']:.2f}V")
+        # For single robot system, request image directly from robot
+        config = configparser.ConfigParser()
+        config.read('robot_hub_config.ini')
+        robot_ip = config.get('ROBOT', 'robot_ip', fallback='192.168.1.166')
+        robot_port = config.get('ROBOT', 'robot_port', fallback='8080')
         
-        # Update sensor data and last seen time
-        updates = {
-            'sensor_data': sensor_data,
-            'last_seen': datetime.now()
-        }
-        
-        success = vila_service.robot_manager.update_robot_status(robot_id, updates)
-        
-        if success:
-            # Broadcast sensor update to monitoring clients
-            socketio.emit('robot_sensors', {
-                'robot_id': robot_id,
-                'sensor_data': sensor_data,
-                'timestamp': time.time()
-            }, room='monitors')
+        try:
+            # Request image from robot
+            response = requests.get(
+                f"http://{robot_ip}:{robot_port}/image",
+                timeout=5
+            )
             
+            if response.status_code == 200:
+                image_data = response.json()
+                return jsonify({
+                    'success': True,
+                    'robot_id': robot_id,
+                    'image': image_data.get('image'),
+                    'format': image_data.get('format', 'JPEG'),
+                    'width': image_data.get('width', 640),
+                    'height': image_data.get('height', 480),
+                    'timestamp': time.time()
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': f'Robot image request failed: HTTP {response.status_code}'
+                }), 502
+                
+        except requests.exceptions.RequestException as e:
             return jsonify({
-                'success': True,
-                'message': 'Sensor data updated'
-            })
-        else:
-            return jsonify({'success': False, 'error': 'Failed to update sensors'}), 500
+                'success': False,
+                'error': f'Robot not reachable: {str(e)}'
+            }), 503
             
     except Exception as e:
-        logger.error(f"Error updating sensors for robot {robot_id}: {e}")
+        logger.error(f"Error getting image from robot {robot_id}: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/robots/<robot_id>/analyze', methods=['POST'])
+@app.route('/robots/<robot_id>/analyze', methods=['POST', 'GET'])
 def analyze_for_robot(robot_id):
-    """Analyze image for specific robot"""
+    """Analyze image for specific robot - supports both push and pull modes"""
     try:
         if not vila_service.model_loaded:
             return jsonify({'error': 'VILA model not loaded'}), 503
         
         if not vila_service.model_enabled:
             return jsonify({'error': 'VILA model is disabled - please enable it first'}), 503
+        
+        if request.method == 'POST':
+            # LEGACY: Robot pushing image data (still supported)
+            data = request.get_json()
+            image_data = base64.b64decode(data['image'])
+            image = Image.open(io.BytesIO(image_data))
+            prompt = data.get('prompt', 'Analyze this environment for robot navigation')
             
-        data = request.get_json()
+        elif request.method == 'GET':
+            # NEW: Client-initiated analysis - request image from robot first
+            try:
+                # Get image from robot
+                image_response = requests.get(
+                    f"{request.url_root}robots/{robot_id}/image",
+                    timeout=5
+                )
+                
+                if image_response.status_code != 200:
+                    return jsonify({'error': 'Failed to get image from robot'}), 502
+                
+                image_json = image_response.json()
+                if not image_json.get('success'):
+                    return jsonify({'error': 'Robot image request failed'}), 502
+                
+                # Decode the image
+                image_data = base64.b64decode(image_json['image'])
+                image = Image.open(io.BytesIO(image_data))
+                prompt = request.args.get('prompt', 'Analyze this environment for robot navigation')
+                
+            except Exception as e:
+                return jsonify({'error': f'Failed to get image from robot: {str(e)}'}), 502
         
-        # Decode base64 image
-        image_data = base64.b64decode(data['image'])
-        image = Image.open(io.BytesIO(image_data))
-        
-        # AUTO-REGISTER: Register robot if not already registered (for GUI visibility)
+        # Get pre-registered robot (registered at startup)
         robot = vila_service.robot_manager.get_robot(robot_id)
         if not robot:
-            logger.info(f"🤖 Auto-registering robot {robot_id} for GUI visibility")
-            auto_robot_info = {
-                'robot_id': robot_id,
-                'name': f'Auto-Robot {robot_id}',
-                'capabilities': ['navigation', 'camera', 'autonomous'],
-                'connection_type': 'http_analyze',
-                'position': {'x': 0.0, 'y': 0.0, 'z': 0.0, 'heading': 0.0},
-                'battery_level': 85.0  # Default for auto-registered robots
-            }
-            vila_service.robot_manager.register_robot(auto_robot_info)
-            robot = vila_service.robot_manager.get_robot(robot_id)
-            
-            # Broadcast robot registration to GUI clients
-            socketio.emit('robot_registered', {
-                'robot_id': robot_id,
-                'name': auto_robot_info['name'],
-                'auto_registered': True
-            })
+            logger.error(f"❌ Robot {robot_id} not found - should be pre-registered at startup")
+            return jsonify({'error': f'Robot {robot_id} not configured'}), 404
         
         # Update robot's last seen time
         vila_service.robot_manager.update_robot_status(robot_id, {'last_seen': datetime.now()})
@@ -637,13 +749,13 @@ def analyze_for_robot(robot_id):
         # Only GUI can send movement commands to ensure proper logging and safety
         logger.info(f"🔒 Robot {robot_id}: VILA analysis queued for GUI processing")
         
+        # 🛡️ SECURITY: Never send VILA responses or commands to robots
+        # Robots should only receive explicit movement commands via the command queue
         return jsonify({
             'success': True,
             'robot_id': robot_id,
-            'analysis': response,
-            'commands': commands,
-            'timestamp': time.time(),
-            'gui_processing_required': any(commands.values())
+            'message': 'Analysis complete - commands will be sent separately if approved',
+            'timestamp': time.time()
         })
         
     except Exception as e:
@@ -667,29 +779,11 @@ def robot_commands(robot_id):
             data = request.get_json()
             command_type = data['command_type']
             
-            # CRITICAL SAFETY: Server-side movement validation
-            # Even though GUI should control movement, server must validate for safety
-            movement_commands = ['move', 'turn', 'forward', 'backward', 'left', 'right']
-            if command_type in movement_commands:
-                direction = data.get('parameters', {}).get('direction', command_type)
-                
-                # SERVER-SIDE SAFETY CHECK: Refuse movement commands if safety not confirmed
-                # This prevents ANY external process from bypassing GUI safety
-                safety_confirmed = data.get('safety_confirmed', False)
-                gui_movement_enabled = data.get('gui_movement_enabled', False)
-                
-                if not safety_confirmed or not gui_movement_enabled:
-                    logger.warning(f"🚫 SERVER SAFETY BLOCK: Movement command '{direction}' rejected - missing safety confirmation")
-                    logger.warning(f"   └── safety_confirmed: {safety_confirmed}, gui_movement_enabled: {gui_movement_enabled}")
-                    return jsonify({
-                        'success': False, 
-                        'error': f'Movement command rejected by server safety system',
-                        'details': 'GUI must confirm movement is enabled and safe'
-                    }), 403
-                
-                logger.info(f"✅ SAFE COMMAND: Accepting {command_type} command '{direction}' to robot {robot_id}")
-                logger.info(f"   └── Command from GUI with safety confirmation - server allows movement")
+            # Extract safety parameters from the request
+            safety_confirmed = data.get('safety_confirmed', False)
+            gui_movement_enabled = data.get('gui_movement_enabled', False)
             
+            # Create the command object
             command = RobotCommand(
                 robot_id=robot_id,
                 command_type=command_type,
@@ -705,17 +799,29 @@ def robot_commands(robot_id):
                 logger.info(f"📝 Available robots: {list(vila_service.robot_manager.robots.keys())}")
                 return jsonify({'success': False, 'error': f'Robot {robot_id} not found in registry'}), 404
             
-            success = vila_service.robot_manager.send_command(robot_id, command)
+            # 🛡️ USE SINGLE COMMAND GATEWAY - All safety validation happens here
+            success, message = vila_service.robot_manager.execute_command(
+                robot_id=robot_id,
+                command=command,
+                safety_confirmed=safety_confirmed,
+                gui_movement_enabled=gui_movement_enabled,
+                source="HTTP_API"
+            )
             
             if success:
-                logger.info(f"✅ Command sent to robot {robot_id}: {data.get('parameters', {}).get('direction', command_type)}")
+                logger.info(f"✅ HTTP API: Command executed successfully - {message}")
                 return jsonify({
                     'success': True,
-                    'message': 'Command sent successfully'
+                    'message': message
                 })
             else:
-                logger.error(f"❌ Failed to send command to robot {robot_id} - robot exists but command failed")
-                return jsonify({'success': False, 'error': f'Failed to send command to robot {robot_id}'}), 500
+                logger.error(f"❌ HTTP API: Command rejected - {message}")
+                # Return 403 for safety blocks, 500 for other errors
+                status_code = 403 if "rejected" in message else 500
+                return jsonify({
+                    'success': False, 
+                    'error': message
+                }), status_code
                 
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
@@ -851,33 +957,7 @@ def handle_connect():
     logger.info(f"WebSocket client connected")
     emit('status', {'message': 'Connected to VILA Robot Hub'})
 
-@socketio.on('register_robot')
-def handle_register_robot(data):
-    """Handle robot registration via WebSocket"""
-    try:
-        success = vila_service.robot_manager.register_robot(data)
-        if success:
-            emit('registration_response', {
-                'success': True,
-                'robot_id': data.get('robot_id'),
-                'message': 'Robot registered successfully'
-            })
-            
-            # Broadcast to all clients
-            socketio.emit('robot_registered', {
-                'robot_id': data.get('robot_id'),
-                'name': data.get('name', 'Unknown')
-            })
-        else:
-            emit('registration_response', {
-                'success': False,
-                'error': 'Failed to register robot'
-            })
-    except Exception as e:
-        emit('registration_response', {
-            'success': False,
-            'error': str(e)
-        })
+# WebSocket robot registration removed - single robot system uses hardcoded configuration
 
 @socketio.on('analyze_image')
 def handle_analyze_image(data):
@@ -900,11 +980,12 @@ def handle_analyze_image(data):
         response = vila_service.vila_model.generate_response(prompt=prompt, image=image)
         commands = vila_service.parse_navigation_response(response)
         
+        # 🛡️ SECURITY: Never send VILA responses or commands to robots
+        # Robots should only receive explicit movement commands via the command queue
         result = {
             'success': True,
             'robot_id': robot_id,
-            'analysis': response,
-            'commands': commands,
+            'message': 'Analysis complete - commands will be sent separately if approved',
             'timestamp': time.time()
         }
         
@@ -1002,15 +1083,15 @@ def main():
     # Load configuration
     config = load_config()
     http_port = int(config.get('DEFAULT', 'http_port', fallback=5000))
-    tcp_port = int(config.get('DEFAULT', 'tcp_port', fallback=9999))
     
     # Initialize VILA service
     logger.info("Initializing VILA service...")
     if vila_service.initialize():
         logger.info("✅ VILA Robot Hub ready!")
         logger.info(f"🌐 HTTP/WebSocket server starting on port {http_port}")
-        logger.info(f"🔌 TCP server listening on port {tcp_port}")
         logger.info("📡 WebSocket enabled for real-time communication")
+        logger.info("🎯 SINGLE ROBOT SYSTEM: Streamlined HTTP/WebSocket communication")
+        logger.info("🤖 Robot: yahboomcar_x3_01 @ 192.168.1.166 (command polling pattern)")
         
         # Start the server
         socketio.run(app, host='0.0.0.0', port=http_port, debug=False)

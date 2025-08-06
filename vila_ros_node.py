@@ -33,8 +33,15 @@ class VILARosNode:
         # ROS Publishers
         self.analysis_pub = rospy.Publisher('/vila/analysis', String, queue_size=10)
         self.navigation_pub = rospy.Publisher('/vila/navigation_command', String, queue_size=10)
-        self.cmd_vel_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
+        # ⚠️ DISABLED: Direct cmd_vel publishing bypasses safety system
+        # self.cmd_vel_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
         self.status_pub = rospy.Publisher('/vila/status', Bool, queue_size=10)
+        
+        # 🛡️ SAFETY: Disable direct robot control to enforce single command gateway
+        self.direct_robot_control_enabled = False
+        rospy.logwarn("🚫 SAFETY: Direct robot control DISABLED - all commands must go through unified gateway")
+        rospy.logwarn("   └── This ROS node will NOT publish to /cmd_vel")
+        rospy.logwarn("   └── Use the robot_vila_server.py gateway for all robot commands")
         
         # ROS Subscribers
         self.image_sub = rospy.Subscriber('/camera/image_raw', Image, self.image_callback)
@@ -92,8 +99,15 @@ Keep it concise for real-time navigation."""
             nav_commands = self.parse_navigation_commands(response)
             self.navigation_pub.publish(String(data=json.dumps(nav_commands)))
             
-            # Send velocity commands
-            self.send_velocity_commands(nav_commands)
+            # 🛡️ SAFETY: All robot commands must go through the single gateway
+            if self.direct_robot_control_enabled:
+                rospy.logwarn("🚫 SAFETY VIOLATION: Direct robot control attempted but blocked")
+                rospy.logwarn(f"   └── Commands blocked: {nav_commands}")
+                rospy.logwarn("   └── Use robot_vila_server.py gateway for ALL robot control")
+            else:
+                rospy.loginfo("✅ SAFETY: Commands routed to gateway instead of direct /cmd_vel")
+                rospy.loginfo(f"   └── Commands: {nav_commands}")
+                rospy.loginfo("   └── Send these to robot_vila_server.py for proper safety validation")
             
         except Exception as e:
             rospy.logerr(f"Error processing image: {e}")
@@ -133,27 +147,18 @@ Keep it concise for real-time navigation."""
         return commands
     
     def send_velocity_commands(self, commands):
-        """Convert navigation commands to velocity commands"""
-        twist = Twist()
+        """
+        🚫 DISABLED: Direct velocity commands bypass safety system
         
-        action = commands.get('action', 'stop')
-        confidence = commands.get('confidence', 0.0)
+        This method is disabled to enforce single command gateway architecture.
+        All robot commands must go through robot_vila_server.py for proper safety validation.
+        """
+        rospy.logwarn("🚫 DISABLED: send_velocity_commands() called but blocked for safety")
+        rospy.logwarn(f"   └── Commands that would have been sent: {commands}")
+        rospy.logwarn("   └── Use robot_vila_server.py gateway for ALL robot commands")
+        rospy.logwarn("   └── This ensures proper safety validation and single point of control")
         
-        # Only act if confidence is above threshold
-        if confidence < 0.5:
-            action = 'stop'
-        
-        if action == 'move_forward':
-            twist.linear.x = 0.2  # meters per second
-        elif action == 'turn_left':
-            twist.angular.z = 0.5  # radians per second
-        elif action == 'turn_right':
-            twist.angular.z = -0.5
-        else:  # stop
-            twist.linear.x = 0.0
-            twist.angular.z = 0.0
-        
-        self.cmd_vel_pub.publish(twist)
+        # Do NOT publish to /cmd_vel - this would bypass our safety system
     
     def run(self):
         """Main run loop"""

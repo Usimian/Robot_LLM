@@ -179,43 +179,18 @@ class RobotManager:
             return False
     
     async def send_command_to_robot(self, robot_id: str, command: Dict[str, Any]) -> tuple[bool, str]:
-        """Send command with safety checks"""
-        # Check safety first
-        movement_allowed, reason = await self.safety.check_movement_allowed(robot_id)
+        """
+        🚫 DISABLED: This unified controller bypasses the single command gateway
         
-        if 'movement' in command and not movement_allowed:
-            logger.warning(f"🚫 Movement command blocked for {robot_id}: {reason}")
-            return False, f"Movement blocked: {reason}"
+        This method is disabled to enforce single command gateway architecture.
+        All robot commands must go through robot_vila_server.py for proper safety validation.
+        """
+        logger.error("🚫 ARCHITECTURAL VIOLATION: Unified controller attempted direct robot communication")
+        logger.error(f"   └── Robot: {robot_id}, Command: {command}")
+        logger.error("   └── This bypasses the single command gateway in robot_vila_server.py")
+        logger.error("   └── USE ONLY robot_vila_server.py for ALL robot communication")
         
-        async with self.lock:
-            if robot_id not in self.robots:
-                return False, "Robot not found"
-                
-            robot = self.robots[robot_id]
-            
-            try:
-                # Direct HTTP communication (eliminate protocol overhead)
-                robot_url = f"http://{robot.position.get('ip', 'localhost')}:8080/command"
-                
-                # Use asyncio-compatible HTTP client
-                import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(robot_url, json=command, timeout=5) as response:
-                        if response.status == 200:
-                            # Update command history
-                            robot.last_command = command.get('type', 'unknown')
-                            robot.command_history.append(f"{datetime.now().isoformat()}: {robot.last_command}")
-                            if len(robot.command_history) > 10:  # Keep last 10 commands
-                                robot.command_history.pop(0)
-                            
-                            logger.info(f"✅ Command sent to {robot_id}: {command.get('type', 'unknown')}")
-                            return True, "Command sent successfully"
-                        else:
-                            return False, f"Robot responded with status {response.status}"
-                            
-            except Exception as e:
-                logger.error(f"❌ Failed to send command to {robot_id}: {e}")
-                return False, str(e)
+        return False, "DISABLED: Use robot_vila_server.py single command gateway instead"
 
 class VILAProcessor:
     """Single VILA instance for all processing"""

@@ -250,7 +250,8 @@ class TCPRobotClient:
             
             response = self.send_message(message)
             if response and response.get('success'):
-                print(f"🤖 TCP Analysis: {response['analysis']}")
+                print(f"🤖 TCP Analysis: {response.get('message', 'Analysis complete')}")
+                print("📝 Note: Analysis results are processed by the server - movement commands will be sent separately")
                 return response
             else:
                 print(f"❌ TCP analysis failed: {response}")

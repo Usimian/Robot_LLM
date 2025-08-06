@@ -29,7 +29,6 @@ class ServerConfig:
     """Server configuration"""
     host: str = "localhost"
     http_port: int = 5000
-    tcp_port: int = 9999
     
     @property
     def http_url(self) -> str:
@@ -79,6 +78,9 @@ class RobotGUI:
         
         # Start robot list refresh for GUI visibility
         self.root.after(2500, self.start_robot_list_refresh)
+        
+        # Start sensor polling for monitoring tab
+        self.root.after(3000, self.start_sensor_polling)
 
     def setup_websocket(self):
         """Setup WebSocket event handlers"""
@@ -108,10 +110,7 @@ class RobotGUI:
             logger.info(f"Robot activity received: {data.get('robot_id')} - {data.get('activity_type')}")
             self.update_queue.put(('robot_activity', data))
 
-        @self.sio.event
-        def robot_sensors(data):
-            logger.info(f"Robot sensors received: {data.get('robot_id')}")
-            self.update_queue.put(('robot_sensors', data))
+        # Robot sensors now use pull-based polling instead of WebSocket push
 
     def create_gui(self):
         """Create the main GUI interface"""
@@ -193,7 +192,6 @@ class RobotGUI:
         
         # Create tabs
         self.create_status_tab()
-        self.create_robots_tab()
         self.create_control_tab()
         self.create_vila_activity_tab()  # New VILA activity tab
         self.create_monitoring_tab()
@@ -416,6 +414,14 @@ class RobotGUI:
             # Enable/disable movement buttons based on toggle state
             self.update_movement_buttons_state()
             
+            # 🛡️ CRITICAL SAFETY: Auto-disable VILA autonomous mode when movement is disabled
+            if not self.movement_enabled and hasattr(self, 'vila_autonomous') and self.vila_autonomous:
+                self.log_movement_activity("🔒 SAFETY: Auto-disabling VILA autonomous mode (movement disabled)", "SAFETY")
+                self.vila_autonomous_var.set(False)  # Update the checkbox
+                self.vila_autonomous = False  # Update the internal state
+                self.vila_autonomous_btn.configure(text="VILA Auto Nav Mode\n❌ Disabled")  # Update button text
+                self.log_pipeline_activity("🛡️ VILA autonomous mode automatically disabled for safety", "SAFETY")
+            
             # Log the change
             self.log_message(f"🔄 Robot movement {status.lower()}")
             
@@ -512,52 +518,7 @@ class RobotGUI:
         ttk.Button(health_frame, text="Refresh Health Info", 
                   command=self.update_health_info).pack(pady=5)
 
-    def create_robots_tab(self):
-        """Create the robots management tab"""
-        robots_frame = ttk.Frame(self.notebook)
-        self.notebook.add(robots_frame, text="Robots")
-        
-        # Robot list section  
-        list_frame = ttk.LabelFrame(robots_frame, text="Robot Status", padding=10)
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # Robot treeview
-        columns = ('ID', 'Name', 'Status', 'Battery', 'Last Seen', 'Position')
-        self.robot_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=10)
-        
-        for col in columns:
-            self.robot_tree.heading(col, text=col)
-            self.robot_tree.column(col, width=120)
-        
-        # Scrollbar for treeview
-        tree_scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.robot_tree.yview)
-        self.robot_tree.configure(yscrollcommand=tree_scroll.set)
-        
-        self.robot_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Robot selection handling
-        self.robot_tree.bind('<<TreeviewSelect>>', self.on_robot_select)
-        
-        # Robot details section
-        details_frame = ttk.LabelFrame(robots_frame, text="Robot Information", padding=10)
-        details_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        self.robot_details_text = scrolledtext.ScrolledText(details_frame, height=8, wrap=tk.WORD)
-        self.robot_details_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Robot management
-        mgmt_frame = ttk.Frame(robots_frame)
-        mgmt_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        ttk.Button(mgmt_frame, text="Refresh Status", 
-                  command=self.refresh_robot_list).pack(side=tk.LEFT, padx=2)
-        
-        # Status indicator
-        self.robot_count_var = tk.StringVar(value="No robots connected")
-        status_label = ttk.Label(mgmt_frame, textvariable=self.robot_count_var, 
-                                font=("Arial", 9), foreground="gray")
-        status_label.pack(side=tk.RIGHT, padx=10)
+    # Robots tab removed - single robot system doesn't need robot management tab
 
     def create_control_tab(self):
         """Create the robot control tab"""
@@ -662,11 +623,10 @@ class RobotGUI:
         sensor_grid = ttk.Frame(sensor_frame)
         sensor_grid.pack(fill=tk.X)
         
-        # Real sensor displays (no placeholders)
+        # Essential sensor displays for single robot system (updated per ROBOT_UNIFIED_INTEGRATION_GUIDE.md)
         sensors = [
-            ("Lidar Distance", "meters"), ("IMU Heading", "degrees"), 
-            ("GPS Position", "lat/lon"), ("Camera Status", "status"),
-            ("Battery Voltage", "volts"), ("Motor Temperature", "°C")
+            ("Battery Voltage", "volts"), ("IMU Acceleration", "m/s²"), 
+            ("Camera Status", "status"), ("Temperature", "°C")
         ]
         
         self.sensor_vars = {}
@@ -690,9 +650,13 @@ class RobotGUI:
         status_frame.pack(fill=tk.X, pady=(10, 0))
         
         ttk.Label(status_frame, text="Sensor Status:").pack(side=tk.LEFT, padx=5)
-        self.sensor_status_var = tk.StringVar(value="No robot selected")
+        self.sensor_status_var = tk.StringVar(value="Waiting for sensor data")
         self.sensor_status_label = ttk.Label(status_frame, textvariable=self.sensor_status_var, foreground="gray")
         self.sensor_status_label.pack(side=tk.LEFT, padx=5)
+        
+        # Add pull-based VILA analysis button
+        ttk.Button(status_frame, text="Request VILA Analysis", 
+                  command=self.request_vila_analysis).pack(side=tk.RIGHT, padx=5)
 
     def create_settings_tab(self):
         """Create the settings tab"""
@@ -720,15 +684,6 @@ class RobotGUI:
         self.http_port_entry = tk.Entry(http_port_frame, width=20)
         self.http_port_entry.pack(side=tk.LEFT, padx=5)
         self.http_port_entry.insert(0, str(self.config.http_port))
-        
-        # TCP Port setting
-        tcp_port_frame = ttk.Frame(server_frame)
-        tcp_port_frame.pack(fill=tk.X, pady=2)
-        
-        ttk.Label(tcp_port_frame, text="TCP Port:", width=15).pack(side=tk.LEFT)
-        self.tcp_port_entry = tk.Entry(tcp_port_frame, width=20)
-        self.tcp_port_entry.pack(side=tk.LEFT, padx=5)
-        self.tcp_port_entry.insert(0, str(self.config.tcp_port))
         
         # Apply settings button
         ttk.Button(server_frame, text="Apply Settings", 
@@ -959,8 +914,7 @@ class RobotGUI:
                 elif update_type == 'robot_activity':
                     self.handle_robot_activity(data)
                     
-                elif update_type == 'robot_sensors':
-                    self.handle_robot_sensors(data)
+                # Robot sensors now handled by direct polling, not WebSocket events
                     
                 elif update_type == 'connection_status':
                     self.update_connection_status(data)
@@ -1002,17 +956,21 @@ class RobotGUI:
             logger.error(f"Error handling robot activity: {e}")
 
     def handle_robot_sensors(self, data):
-        """Handle robot sensor data updates"""
+        """Handle robot sensor data updates - single robot system"""
         try:
             robot_id = data.get('robot_id')
             sensor_data = data.get('sensor_data', {})
             
-            # Update sensor display if this is the selected robot
-            if robot_id == self.selected_robot_id:
-                if sensor_data:
-                    self.update_sensor_display(sensor_data)
-                else:
-                    self.clear_sensor_display(f"Robot {robot_id} sent empty sensor data")
+            logger.info(f"📊 Sensor data received from {robot_id}: {list(sensor_data.keys())}")
+            
+            # SINGLE ROBOT SYSTEM: Always update display (no robot selection needed)
+            if sensor_data:
+                print(f"🔥 CALLING update_sensor_display with: {sensor_data}")
+                self.update_sensor_display(sensor_data)
+                logger.info(f"✅ Updated sensor display with {len(sensor_data)} sensors")
+            else:
+                print(f"🔥 NO SENSOR DATA - clearing display")
+                self.clear_sensor_display(f"Robot {robot_id} sent empty sensor data")
             
             # Log sensor updates
             sensor_summary = []
@@ -1040,14 +998,12 @@ class RobotGUI:
                 self.clear_sensor_display("No sensor data received")
                 return
             
-            # Mapping of sensor data keys to display names
+            # Mapping of sensor data keys to display names (updated per ROBOT_UNIFIED_INTEGRATION_GUIDE.md)
             sensor_mapping = {
-                'lidar_distance': ('Lidar Distance', 'meters'),
-                'imu_heading': ('IMU Heading', 'degrees'),
-                'gps_lat': ('GPS Position', 'lat/lon'),
-                'camera_status': ('Camera Status', 'status'),
                 'battery_voltage': ('Battery Voltage', 'volts'),
-                'temperature': ('Motor Temperature', '°C')
+                'imu_values': ('IMU Acceleration', 'm/s²'),
+                'camera_status': ('Camera Status', 'status'),
+                'temperature': ('Orin CPU Temperature', '°C')
             }
             
             # Track which sensors have data
@@ -1064,9 +1020,13 @@ class RobotGUI:
                     display_name, unit = sensor_mapping[key]
                     if display_name in self.sensor_vars:
                         try:
-                            if key == 'gps_lat' and 'gps_lon' in sensor_data:
-                                # Special handling for GPS coordinates
-                                formatted_value = f"{value:.6f}, {sensor_data['gps_lon']:.6f}"
+                            # Special handling for IMU values (acceleration x, y, z)
+                            if key == 'imu_values' and isinstance(value, dict):
+                                # Format as "X: 0.00, Y: 0.00, Z: 9.80 m/s²"
+                                x = value.get('x', 0)
+                                y = value.get('y', 0)  
+                                z = value.get('z', 0)
+                                formatted_value = f"X:{x:.2f} Y:{y:.2f} Z:{z:.2f} {unit}"
                             elif isinstance(value, (int, float)):
                                 formatted_value = f"{value:.2f} {unit}"
                             else:
@@ -1077,7 +1037,7 @@ class RobotGUI:
                             self.sensor_labels[display_name].configure(foreground="black")
                             sensors_updated += 1
                             
-                        except (ValueError, TypeError) as e:
+                        except Exception as e:
                             # Handle invalid sensor values
                             self.sensor_vars[display_name].set("Invalid data")
                             self.sensor_labels[display_name].configure(foreground="red")
@@ -1095,7 +1055,8 @@ class RobotGUI:
         except Exception as e:
             logger.error(f"Error updating sensor display: {e}")
             self.sensor_status_var.set("Sensor update error")
-            self.sensor_status_label.configure(foreground="red")
+    
+    # Test sensor method removed - single robot system doesn't need testing UI
 
     # Communication methods
     def connect_to_server(self):
@@ -1194,52 +1155,28 @@ class RobotGUI:
         """Refresh the robot list from server"""
         def refresh_worker():
             try:
-                response = requests.get(f"{self.config.http_url}/robots", timeout=5)
+                response = requests.get(f"{self.config.http_url}/robot", timeout=5)
                 if response.status_code == 200:
                     data = response.json()
-                    robots = data.get('robots', [])
+                    # Single robot system - convert single robot to list format
+                    robot_data = data.get('robot')
+                    robots = [robot_data] if robot_data else []
                     
-                    def update_robot_display():
-                        # Clear existing items
-                        for item in self.robot_tree.get_children():
-                            self.robot_tree.delete(item)
-                        
-                        # Add robots to tree with better battery level formatting
-                        for robot in robots:
-                            battery_level = robot.get('battery_level', 0)
-                            battery_color = ""
-                            if battery_level < 20:
-                                battery_color = " ⚠️"  # Warning for low battery
-                            elif battery_level < 10:
-                                battery_color = " 🔴"  # Critical battery
+                    def update_robot_data():
+                        if robots:
+                            # Store robot data
+                            self.robots = {r['robot_id']: r for r in robots}
                             
-                            self.robot_tree.insert('', 'end', values=(
-                                robot.get('robot_id', 'Unknown'),
-                                robot.get('name', 'Unknown'),
-                                robot.get('status', 'Unknown'),
-                                f"{battery_level:.1f}%{battery_color}",
-                                robot.get('last_seen', 'Never'),
-                                f"({robot.get('position', {}).get('x', 0):.1f}, {robot.get('position', {}).get('y', 0):.1f})"
-                            ))
-                        
-                        self.robots = {r['robot_id']: r for r in robots}
-                        
-                        # Auto-select the single robot for control
-                        if len(robots) == 1 and not self.selected_robot_id:
-                            robot_id = robots[0]['robot_id']
-                            self.selected_robot_id = robot_id
-                            self.selected_robot_var.set(robot_id)
-                            print(f"🤖 Auto-selected single robot: {robot_id}")
+                            # Auto-select the single robot for control
+                            if len(robots) == 1 and not self.selected_robot_id:
+                                robot_id = robots[0]['robot_id']
+                                self.selected_robot_id = robot_id
+                                self.selected_robot_var.set(robot_id)
+                                print(f"🤖 Auto-selected single robot: {robot_id}")
+                        else:
+                            self.robots = {}
                     
-                    self.root.after(0, update_robot_display)
-                    
-                    # Update status indicator
-                    if len(robots) == 0:
-                        self.robot_count_var.set("No robots connected")
-                    elif len(robots) == 1:
-                        self.robot_count_var.set("✅ 1 robot connected")
-                    else:
-                        self.robot_count_var.set(f"⚠️ {len(robots)} robots connected (expected 1)")
+                    self.root.after(0, update_robot_data)
                     
                     self.log_message(f"Refreshed robot status: {len(robots)} robot{'s' if len(robots) != 1 else ''}")
                 else:
@@ -1265,34 +1202,7 @@ class RobotGUI:
         refresh_thread.start()
         print("🔄 Started periodic robot status refresh (every 15 seconds)")
 
-    def on_robot_select(self, event):
-        """Handle robot selection in the tree"""
-        selection = self.robot_tree.selection()
-        if selection:
-            item = self.robot_tree.item(selection[0])
-            robot_id = item['values'][0]
-            self.selected_robot_id = robot_id
-            self.selected_robot_var.set(robot_id)
-            
-            # Update robot details
-            if robot_id in self.robots:
-                robot = self.robots[robot_id]
-                details = json.dumps(robot, indent=2, default=str)
-                self.robot_details_text.delete(1.0, tk.END)
-                self.robot_details_text.insert(tk.END, details)
-                
-                # Update sensor display with current robot's sensor data
-                if 'sensor_data' in robot and robot['sensor_data']:
-                    self.update_sensor_display(robot['sensor_data'])
-                else:
-                    # Clear sensor display with specific reason
-                    robot_status = robot.get('status', 'unknown')
-                    if robot_status == 'offline':
-                        self.clear_sensor_display(f"Robot {robot_id} is offline")
-                    elif robot_status == 'error':
-                        self.clear_sensor_display(f"Robot {robot_id} has errors")
-                    else:
-                        self.clear_sensor_display(f"Robot {robot_id} - no sensor data available")
+    # Robot selection method removed - single robot system auto-selects
 
     def clear_sensor_display(self, reason="No robot selected"):
         """Clear all sensor displays with specific reason"""
@@ -1699,8 +1609,7 @@ class RobotGUI:
         try:
             self.config.host = self.host_entry.get()
             self.config.http_port = int(self.http_port_entry.get())
-            self.config.tcp_port = int(self.tcp_port_entry.get())
-            
+
             # Update server label
             self.server_label.configure(text=self.config.http_url)
             
@@ -1755,6 +1664,21 @@ class RobotGUI:
         """Toggle VILA auto navigation mode"""
         try:
             autonomous_enabled = self.vila_autonomous_var.get()
+            
+            # 🛡️ CRITICAL SAFETY: Prevent enabling VILA autonomous when movement is disabled
+            if autonomous_enabled and not self.movement_enabled:
+                self.log_movement_activity("🚫 SAFETY BLOCK: Cannot enable VILA autonomous mode - movement is disabled", "SAFETY")
+                self.log_pipeline_activity("🛡️ Enable movement first before activating VILA autonomous mode", "SAFETY")
+                # Reset the checkbox to disabled
+                self.vila_autonomous_var.set(False)
+                autonomous_enabled = False
+                # Show warning message
+                messagebox.showwarning(
+                    "Safety Block", 
+                    "Cannot enable VILA autonomous mode while movement is disabled.\n\n"
+                    "Please enable movement first, then activate VILA autonomous mode."
+                )
+            
             self.vila_autonomous = autonomous_enabled
             
             # Update button text - show current state
@@ -2384,11 +2308,13 @@ class RobotGUI:
                 try:
                     time.sleep(15)  # Check every 15 seconds
                     if hasattr(self, 'config') and self.config:
-                        response = requests.get(f"{self.config.http_url}/robots", timeout=5)
+                        response = requests.get(f"{self.config.http_url}/robot", timeout=5)
                         if response.status_code == 200:
                             data = response.json()
-                            robot_count = data.get('count', 0)
-                            robots = data.get('robots', [])
+                            # Single robot system - convert single robot to list format
+                            robot_data = data.get('robot')
+                            robots = [robot_data] if robot_data else []
+                            robot_count = len(robots)
                             
                             def update_robot_display():
                                 if robot_count > 0:
@@ -2415,6 +2341,77 @@ class RobotGUI:
         robot_list_thread = threading.Thread(target=refresh_robot_list, daemon=True)
         robot_list_thread.start()
         print("🤖 Started periodic robot list refresh (every 15 seconds)")
+
+    def start_sensor_polling(self):
+        """Start periodic sensor data polling from robot"""
+        def poll_sensors():
+            while True:
+                try:
+                    time.sleep(5)  # Poll sensors every 5 seconds
+                    if hasattr(self, 'config') and self.config:
+                        # Request sensor data from robot
+                        response = requests.get(
+                            f"{self.config.http_url}/robots/yahboomcar_x3_01/sensors",
+                            timeout=3
+                        )
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            sensor_data = data.get('sensor_data', {})
+                            
+                            if sensor_data:
+                                # Update sensor display directly (no WebSocket needed)
+                                def update_sensors():
+                                    self.update_sensor_display(sensor_data)
+                                    
+                                self.root.after(0, update_sensors)
+                            else:
+                                def clear_sensors():
+                                    self.clear_sensor_display("No sensor data available")
+                                self.root.after(0, clear_sensors)
+                        else:
+                            def error_sensors():
+                                self.clear_sensor_display(f"Sensor request failed: HTTP {response.status_code}")
+                            self.root.after(0, error_sensors)
+                            
+                except Exception as e:
+                    print(f"Sensor polling error: {e}")
+                    time.sleep(10)  # Wait longer on error
+        
+        sensor_thread = threading.Thread(target=poll_sensors, daemon=True)
+        sensor_thread.start()
+        print("📊 Started sensor data polling (every 5 seconds)")
+    
+    def request_vila_analysis(self):
+        """Request VILA analysis using pull-based image system"""
+        def analysis_worker():
+            try:
+                # Request VILA analysis with pull-based image
+                response = requests.get(
+                    f"{self.config.http_url}/robots/yahboomcar_x3_01/analyze",
+                    params={"prompt": "Analyze this environment for robot navigation"},
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    def update_analysis_result():
+                        self.log_movement_activity("✅ Pull-based VILA analysis completed", "INFO")
+                        # The analysis result will be processed by the existing VILA activity monitoring
+                    self.root.after(0, update_analysis_result)
+                else:
+                    def update_analysis_error():
+                        self.log_movement_activity(f"❌ VILA analysis failed: HTTP {response.status_code}", "ERROR")
+                    self.root.after(0, update_analysis_error)
+                    
+            except Exception as e:
+                def update_analysis_exception():
+                    self.log_movement_activity(f"❌ VILA analysis error: {e}", "ERROR")
+                self.root.after(0, update_analysis_exception)
+        
+        # Run in background thread
+        threading.Thread(target=analysis_worker, daemon=True).start()
+        self.log_movement_activity("🔄 Requesting VILA analysis (pull-based)...", "INFO")
 
 
 def main():
