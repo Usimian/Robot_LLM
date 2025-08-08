@@ -1,0 +1,13 @@
+# ROS2 service for requesting VILA analysis
+# Replaces HTTP-based VILA analysis requests
+
+string robot_id
+string prompt
+sensor_msgs/Image image
+---
+bool success
+string analysis_result
+string navigation_commands_json
+float64 confidence
+string error_message
+int64 timestamp_ns

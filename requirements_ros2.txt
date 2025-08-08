@@ -1,0 +1,49 @@
+# ROS2 Robot System Requirements
+# Updated requirements file with HTTP dependencies removed
+
+# Core ROS2 (typically installed via apt)
+# sudo apt install ros-$ROS_DISTRO-rclpy
+# sudo apt install ros-$ROS_DISTRO-cv-bridge
+# sudo apt install ros-$ROS_DISTRO-sensor-msgs
+# sudo apt install ros-$ROS_DISTRO-geometry-msgs
+# sudo apt install ros-$ROS_DISTRO-std-msgs
+
+# Python packages for ROS2 system
+rclpy>=3.3.0              # ROS2 Python client library
+numpy>=1.21.0             # Numerical computing
+opencv-python>=4.5.0      # Computer vision
+Pillow>=8.0.0             # Image processing
+dataclasses>=0.6          # Data structures (Python 3.7+)
+
+# VILA dependencies (keep existing)
+torch>=1.9.0
+torchvision>=0.10.0
+transformers>=4.20.0
+accelerate>=0.20.0
+tokenizers>=0.13.0
+sentencepiece>=0.1.97
+shortuuid>=1.0.0
+httpx>=0.24.0
+
+# GUI dependencies (keep for Tkinter GUI)
+# tkinter is built-in with Python
+
+# REMOVED HTTP/WebSocket dependencies:
+# requests                 # HTTP client library - NOT NEEDED
+# flask                    # HTTP server framework - NOT NEEDED  
+# flask-socketio           # WebSocket support - NOT NEEDED
+# python-socketio          # WebSocket client - NOT NEEDED
+# aiohttp                  # Async HTTP client - NOT NEEDED
+# websockets              # WebSocket library - NOT NEEDED
+# fastapi                 # Modern HTTP framework - NOT NEEDED
+# uvicorn                 # ASGI server - NOT NEEDED
+
+# Development and testing (optional)
+pytest>=6.0.0            # Testing framework
+pytest-asyncio>=0.18.0   # Async testing
+black>=22.0.0            # Code formatting
+flake8>=4.0.0            # Code linting
+
+# Logging and monitoring
+psutil>=5.8.0            # System monitoring
+colorlog>=6.0.0          # Colored logging
