@@ -1,0 +1,101 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "colcon",
+            "args": [
+                "build",
+                "--packages-up-to",
+                "${input:packageName}",
+                "--cmake-args",
+                "-DCMAKE_BUILD_TYPE=Release"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "detail": "Build a single ROS 2 package with its dependencies"
+        },
+        {
+            "label": "build all",
+            "type": "shell",
+            "command": "colcon",
+            "args": [
+                "build",
+                "--packages-skip",
+                "qoptim_cuda",
+                "--cmake-args",
+                "-DCMAKE_BUILD_TYPE=Release"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "detail": "Build entire ROS 2 workspace (handles dependencies automatically)"
+        },
+        {
+            "label": "clean and build",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "rm -rf build/${input:packageName} install/${input:packageName} log/build_${input:packageName}* && colcon build --packages-up-to ${input:packageName} --cmake-args -DCMAKE_BUILD_TYPE=Release"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "detail": "Clean and build a single ROS 2 package with its dependencies"
+        },
+        {
+            "label": "clean and build all",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "rm -rf build install log && colcon build --packages-skip qoptim_cuda --cmake-args -DCMAKE_BUILD_TYPE=Release"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "detail": "Clean and build entire ROS 2 workspace (handles dependencies automatically)"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "packageName",
+            "description": "Package name to build",
+            "type": "pickString",
+            "options": [
+                "robot_msgs",
+                "robot_vila_system"
+            ]
+        }
+    ]
+}
