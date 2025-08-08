@@ -1,0 +1,27 @@
+/**:
+  ros__parameters:
+    # Robot configuration
+    robot_name: "YahBoom Car X3"
+    robot_ip: "192.168.1.166"
+    robot_port: 8080
+    
+    # VILA model configuration
+    vila_model_path: ""  # Leave empty for default
+    model_load_timeout: 30.0
+    
+    # Safety configuration
+    safety_enabled: true
+    default_movement_enabled: false
+    emergency_stop_timeout: 1.0
+    
+    # Command queue configuration
+    max_queue_size: 100
+    command_timeout: 5.0
+    
+    # QoS configuration
+    reliable_qos_depth: 10
+    best_effort_qos_depth: 10
+    
+    # Logging
+    log_command_history: true
+    max_command_history: 50

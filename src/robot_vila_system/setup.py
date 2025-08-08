@@ -1,0 +1,41 @@
+from setuptools import setup, find_packages
+import os
+from glob import glob
+
+package_name = 'robot_vila_system'
+
+setup(
+    name=package_name,
+    version='1.0.0',
+    packages=find_packages(),
+    data_files=[
+        ('share/ament_index/resource_index/packages',
+            ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+        # Launch files
+        (os.path.join('share', package_name, 'launch'), 
+         glob('launch/*.launch.py')),
+        # Config files  
+        (os.path.join('share', package_name, 'config'), 
+         glob('config/*.yaml')),
+        # VILA model files (if any)
+        (os.path.join('share', package_name, 'models'), 
+         glob('models/*') if os.path.exists('models') else []),
+    ],
+    install_requires=['setuptools'],
+    zip_safe=True,
+    maintainer='Robot Developer',
+    maintainer_email='robot@example.com',
+    description='ROS2 VILA Robot System',
+    license='MIT',
+    tests_require=['pytest'],
+    entry_points={
+        'console_scripts': [
+            'vila_server = robot_vila_system.vila_server_node:main',
+            'vila_vision = robot_vila_system.vila_vision_node:main',
+            'robot_client = robot_vila_system.robot_client_node:main',
+            'robot_gui = robot_vila_system.robot_gui_node:main',
+            'gateway_validator = robot_vila_system.gateway_validator_node:main',
+        ],
+    },
+)

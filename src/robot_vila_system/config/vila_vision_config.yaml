@@ -1,0 +1,26 @@
+/**:
+  ros__parameters:
+    # VILA processing configuration
+    navigation_prompt: |
+      You are a robot's vision system. Analyze this camera view and provide:
+      1. Can I move forward safely?
+      2. Are there obstacles ahead?
+      3. What should I do next (move_forward, turn_left, turn_right, stop)?
+      4. Describe what you see briefly.
+      Keep it concise for real-time navigation.
+    
+    # Processing rates
+    image_processing_rate: 2.0  # Hz
+    status_publish_rate: 1.0    # Hz
+    
+    # Command generation
+    auto_command_enabled: true
+    min_confidence_threshold: 0.7
+    default_movement_speed: 0.2
+    default_movement_duration: 1.0
+    
+    # Safety
+    direct_cmd_vel_disabled: true  # Enforce gateway usage
+    
+    # QoS configuration
+    image_qos_reliable: false  # Use best effort for images
