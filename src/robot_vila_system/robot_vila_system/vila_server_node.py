@@ -22,15 +22,14 @@ from pathlib import Path
 import configparser
 
 # ROS2 message imports
-from robot_msgs.msg import RobotCommand, SensorData, VILAAnalysis, RobotStatus
+from robot_msgs.msg import RobotCommand, SensorData, VILAAnalysis
 from robot_msgs.srv import ExecuteCommand, RequestVILAAnalysis
 from sensor_msgs.msg import Image
 from std_msgs.msg import String, Bool
 from geometry_msgs.msg import Twist
 
-# Add VILA paths
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'VILA'))
-from main_vila import VILAModel
+# Import VILA model from ROS2 package
+from robot_vila_system.vila_model import VILAModel
 
 # Configure logging
 logging.basicConfig(
@@ -148,16 +147,11 @@ class RobotVILAServerROS2(Node):
         # Command publishing (for robot to receive)
         self.command_publisher = self.create_publisher(
             RobotCommand, 
-            f'/robot/{self.robot_info.robot_id}/commands',
+            '/robot/commands',
             self.reliable_qos
         )
         
-        # Status publishing
-        self.status_publisher = self.create_publisher(
-            RobotStatus,
-            f'/robot/{self.robot_info.robot_id}/status',
-            self.reliable_qos
-        )
+
         
         # VILA analysis results
         self.analysis_publisher = self.create_publisher(
@@ -185,7 +179,7 @@ class RobotVILAServerROS2(Node):
         # Sensor data from robot
         self.sensor_subscriber = self.create_subscription(
             SensorData,
-            f'/robot/{self.robot_info.robot_id}/sensors',
+            '/robot/sensors',
             self._sensor_data_callback,
             self.best_effort_qos
         )
@@ -193,7 +187,7 @@ class RobotVILAServerROS2(Node):
         # Camera images from robot
         self.image_subscriber = self.create_subscription(
             Image,
-            f'/robot/{self.robot_info.robot_id}/camera/image_raw',
+            '/robot/camera/image_raw',
             self._image_callback,
             self.best_effort_qos
         )
@@ -251,15 +245,11 @@ class RobotVILAServerROS2(Node):
         # Store sensor data
         self.robot_info.sensor_data = {
             'battery_voltage': msg.battery_voltage,
-            'battery_percentage': msg.battery_percentage,
             'temperature': msg.temperature,
-            'humidity': msg.humidity,
             'distance_front': msg.distance_front,
             'distance_left': msg.distance_left,
             'distance_right': msg.distance_right,
-            'wifi_signal': msg.wifi_signal,
             'cpu_usage': msg.cpu_usage,
-            'memory_usage': msg.memory_usage,
             'imu_values': {
                 'x': msg.imu_values.x,
                 'y': msg.imu_values.y,
@@ -382,12 +372,13 @@ Keep it concise for real-time navigation."""
             stop_command = RobotCommand()
             stop_command.robot_id = self.robot_info.robot_id
             stop_command.command_type = "stop"
+            stop_command.linear_x = 0.0
+            stop_command.linear_y = 0.0
+            stop_command.angular_z = 0.0
+            stop_command.duration = 0.0
             stop_command.parameters_json = "{}"
             stop_command.timestamp_ns = self.get_clock().now().nanoseconds
-            stop_command.priority = 10  # Highest priority
-            stop_command.safety_confirmed = True
-            stop_command.gui_movement_enabled = True
-            stop_command.source = "EMERGENCY_STOP"
+            stop_command.source_node = "vila_server_node"
             
             self.command_publisher.publish(stop_command)
             
@@ -513,44 +504,7 @@ Keep it concise for real-time navigation."""
             except Exception as e:
                 self.get_logger().error(f"❌ Error processing command: {e}")
     
-    def _publish_robot_status(self):
-        """Publish current robot status"""
-        status_msg = RobotStatus()
-        status_msg.robot_id = self.robot_info.robot_id
-        status_msg.name = self.robot_info.name
-        status_msg.last_seen_ns = int(self.robot_info.last_seen.timestamp() * 1e9)
-        status_msg.battery_level = self.robot_info.sensor_data.get('battery_percentage', 0.0) if self.robot_info.sensor_data else 0.0
-        status_msg.status = self.robot_info.status
-        status_msg.capabilities = ["navigation", "vision", "sensors"]
-        status_msg.connection_type = "ROS2"
-        status_msg.last_command = self.robot_info.command_history[-1] if self.robot_info.command_history else ""
-        status_msg.command_history = self.robot_info.command_history[-10:]  # Last 10 commands
-        
-        # Add sensor data if available
-        if self.robot_info.sensor_data:
-            sensor_msg = SensorData()
-            sensor_msg.robot_id = self.robot_info.robot_id
-            sensor_msg.battery_voltage = self.robot_info.sensor_data.get('battery_voltage', 0.0)
-            sensor_msg.battery_percentage = self.robot_info.sensor_data.get('battery_percentage', 0.0)
-            sensor_msg.temperature = self.robot_info.sensor_data.get('temperature', 0.0)
-            sensor_msg.humidity = self.robot_info.sensor_data.get('humidity', 0.0)
-            sensor_msg.distance_front = self.robot_info.sensor_data.get('distance_front', 0.0)
-            sensor_msg.distance_left = self.robot_info.sensor_data.get('distance_left', 0.0)
-            sensor_msg.distance_right = self.robot_info.sensor_data.get('distance_right', 0.0)
-            sensor_msg.wifi_signal = self.robot_info.sensor_data.get('wifi_signal', 0)
-            sensor_msg.cpu_usage = self.robot_info.sensor_data.get('cpu_usage', 0.0)
-            sensor_msg.memory_usage = self.robot_info.sensor_data.get('memory_usage', 0.0)
-            sensor_msg.camera_status = self.robot_info.sensor_data.get('camera_status', "Unknown")
-            sensor_msg.timestamp_ns = self.robot_info.sensor_data.get('timestamp', 0)
-            
-            imu_data = self.robot_info.sensor_data.get('imu_values', {})
-            sensor_msg.imu_values.x = imu_data.get('x', 0.0)
-            sensor_msg.imu_values.y = imu_data.get('y', 0.0)
-            sensor_msg.imu_values.z = imu_data.get('z', 0.0)
-            
-            status_msg.sensor_data = sensor_msg
-        
-        self.status_publisher.publish(status_msg)
+
 
 def main(args=None):
     rclpy.init(args=args)

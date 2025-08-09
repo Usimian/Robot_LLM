@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 from robot_msgs.msg import RobotCommand
 from robot_msgs.srv import ExecuteCommand
+from geometry_msgs.msg import Twist
 
 class CommandGatewayValidator(Node):
     """
@@ -45,13 +46,12 @@ class CommandGatewayValidator(Node):
         # Monitor commands FROM the gateway (legitimate path)
         self.gateway_command_subscriber = self.create_subscription(
             RobotCommand,
-            f'/robot/{self.robot_id}/commands',
+            '/robot/commands',
             self._gateway_command_callback,
             10
         )
         
         # Monitor direct cmd_vel publishing (SHOULD NOT EXIST)
-        from geometry_msgs.msg import Twist
         self.direct_cmd_vel_subscriber = self.create_subscription(
             Twist,
             '/cmd_vel',
@@ -65,7 +65,7 @@ class CommandGatewayValidator(Node):
         # Monitor command acknowledgments to track execution
         self.command_ack_subscriber = self.create_subscription(
             RobotCommand,
-            f'/robot/{self.robot_id}/command_ack',
+            '/robot/command_ack',
             self._command_ack_callback,
             10
         )

@@ -22,12 +22,11 @@ import json
 import time
 
 # Custom ROS2 messages
-from robot_msgs.msg import RobotCommand, SensorData, VILAAnalysis, RobotStatus
+from robot_msgs.msg import RobotCommand, SensorData, VILAAnalysis
 from robot_msgs.srv import ExecuteCommand, RequestVILAAnalysis
 
-# Add VILA paths
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'VILA'))
-from main_vila import VILAModel
+# Import VILA model from ROS2 package
+from robot_vila_system.vila_model import VILAModel
 
 class VILARos2Node(Node):
     """
@@ -110,7 +109,7 @@ class VILARos2Node(Node):
         # Camera image subscription
         self.image_sub = self.create_subscription(
             Image,
-            f'/robot/{self.robot_id}/camera/image_raw',
+            '/robot/camera/image_raw',
             self._image_callback,
             self.best_effort_qos
         )
@@ -126,7 +125,7 @@ class VILARos2Node(Node):
         # Command acknowledgments from robot
         self.command_ack_sub = self.create_subscription(
             RobotCommand,
-            f'/robot/{self.robot_id}/command_ack',
+            '/robot/command_ack',
             self._command_ack_callback,
             self.reliable_qos
         )
@@ -273,15 +272,31 @@ Keep it concise for real-time navigation."""
             command_msg = RobotCommand()
             command_msg.robot_id = self.robot_id
             command_msg.command_type = nav_commands['action']
+            
+            # Set movement parameters
+            speed = nav_commands.get('speed', 0.2)
+            duration = nav_commands.get('duration', 1.0)
+            
+            if nav_commands['action'] == 'move_forward':
+                command_msg.linear_x = speed
+            elif nav_commands['action'] == 'move_backward':
+                command_msg.linear_x = -speed
+            elif nav_commands['action'] == 'turn_left':
+                command_msg.angular_z = speed
+            elif nav_commands['action'] == 'turn_right':
+                command_msg.angular_z = -speed
+            elif nav_commands['action'] == 'stop':
+                command_msg.linear_x = 0.0
+                command_msg.angular_z = 0.0
+                duration = 0.0
+                
+            command_msg.duration = duration
             command_msg.parameters_json = json.dumps({
-                'speed': nav_commands.get('speed', 0.2),
-                'duration': nav_commands.get('duration', 1.0)
+                'speed': speed,
+                'duration': duration
             })
             command_msg.timestamp_ns = self.get_clock().now().nanoseconds
-            command_msg.priority = 1
-            command_msg.safety_confirmed = False  # Let gateway decide
-            command_msg.gui_movement_enabled = False  # VILA-generated command
-            command_msg.source = "VILA_VISION"
+            command_msg.source_node = "vila_vision_node"
             
             # Create service request
             request = ExecuteCommand.Request()

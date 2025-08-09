@@ -1,17 +1,11 @@
-# ROS2 message for robot sensor data
-# Replaces HTTP-based sensor communication
-
-string robot_id
-float64 battery_voltage
-float64 battery_percentage
-float64 temperature
-float64 humidity
-float64 distance_front
-float64 distance_left
-float64 distance_right
-int32 wifi_signal
-float64 cpu_usage
-float64 memory_usage
-geometry_msgs/Vector3 imu_values
-string camera_status
-int64 timestamp_ns
+# Sensor data from robot
+string robot_id                    # Robot identifier
+float64 battery_voltage            # Battery voltage (V)
+float64 temperature                # Jetson CPU Temperature (°C)
+float64 distance_front             # Front distance sensor (m)
+float64 distance_left              # Left distance sensor (m)
+float64 distance_right             # Right distance sensor (m)
+float64 cpu_usage                  # CPU usage (%)
+string camera_status               # Camera status
+geometry_msgs/Vector3 imu_values   # IMU readings (x, y, z)
+int64 timestamp_ns                 # Sensor reading timestamp

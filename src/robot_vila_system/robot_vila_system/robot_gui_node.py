@@ -27,7 +27,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 # ROS2 message imports
-from robot_msgs.msg import RobotCommand, SensorData, VILAAnalysis, RobotStatus
+from robot_msgs.msg import RobotCommand, SensorData, VILAAnalysis
 from robot_msgs.srv import ExecuteCommand, RequestVILAAnalysis
 from sensor_msgs.msg import Image as RosImage
 from std_msgs.msg import String, Bool
@@ -46,6 +46,7 @@ class RobotGUIROS2Node(Node):
         self.gui_callback = gui_callback
         self.robot_id = "yahboomcar_x3_01"  # Hardcoded for single robot system
         self.bridge = CvBridge()
+        self.last_vila_update = None  # Track VILA model activity
         
         # QoS profiles
         self.reliable_qos = QoSProfile(
@@ -68,18 +69,12 @@ class RobotGUIROS2Node(Node):
     
     def _setup_subscribers(self):
         """Setup ROS2 subscribers"""
-        # Robot status
-        self.status_subscriber = self.create_subscription(
-            RobotStatus,
-            f'/robot/{self.robot_id}/status',
-            self._robot_status_callback,
-            self.reliable_qos
-        )
+
         
         # Sensor data
         self.sensor_subscriber = self.create_subscription(
             SensorData,
-            f'/robot/{self.robot_id}/sensors',
+            '/robot/sensors',
             self._sensor_data_callback,
             self.best_effort_qos
         )
@@ -87,7 +82,7 @@ class RobotGUIROS2Node(Node):
         # Camera images
         self.image_subscriber = self.create_subscription(
             RosImage,
-            f'/robot/{self.robot_id}/camera/image_raw',
+            '/robot/camera/image_raw',
             self._image_callback,
             self.best_effort_qos
         )
@@ -119,7 +114,7 @@ class RobotGUIROS2Node(Node):
         # Command acknowledgments
         self.command_ack_subscriber = self.create_subscription(
             RobotCommand,
-            f'/robot/{self.robot_id}/command_ack',
+            '/robot/command_ack',
             self._command_ack_callback,
             self.reliable_qos
         )
@@ -161,46 +156,7 @@ class RobotGUIROS2Node(Node):
             '/vila/analyze_image'
         )
     
-    def _robot_status_callback(self, msg: RobotStatus):
-        """Handle robot status updates"""
-        try:
-            status_data = {
-                'robot_id': msg.robot_id,
-                'name': msg.name,
-                'last_seen': msg.last_seen_ns,
-                'battery_level': msg.battery_level,
-                'status': msg.status,
-                'capabilities': msg.capabilities,
-                'connection_type': msg.connection_type,
-                'last_command': msg.last_command,
-                'command_history': msg.command_history
-            }
-            
-            if msg.sensor_data.robot_id:  # Check if sensor data is present
-                status_data['sensor_data'] = {
-                    'battery_voltage': msg.sensor_data.battery_voltage,
-                    'battery_percentage': msg.sensor_data.battery_percentage,
-                    'temperature': msg.sensor_data.temperature,
-                    'humidity': msg.sensor_data.humidity,
-                    'distance_front': msg.sensor_data.distance_front,
-                    'distance_left': msg.sensor_data.distance_left,
-                    'distance_right': msg.sensor_data.distance_right,
-                    'wifi_signal': msg.sensor_data.wifi_signal,
-                    'cpu_usage': msg.sensor_data.cpu_usage,
-                    'memory_usage': msg.sensor_data.memory_usage,
-                    'camera_status': msg.sensor_data.camera_status,
-                    'imu_values': {
-                        'x': msg.sensor_data.imu_values.x,
-                        'y': msg.sensor_data.imu_values.y,
-                        'z': msg.sensor_data.imu_values.z
-                    }
-                }
-            
-            # Send to GUI
-            self.gui_callback('robot_status', status_data)
-            
-        except Exception as e:
-            self.get_logger().error(f"Error processing robot status: {e}")
+
     
     def _sensor_data_callback(self, msg: SensorData):
         """Handle sensor data updates"""
@@ -208,15 +164,11 @@ class RobotGUIROS2Node(Node):
             sensor_data = {
                 'robot_id': msg.robot_id,
                 'battery_voltage': msg.battery_voltage,
-                'battery_percentage': msg.battery_percentage,
                 'temperature': msg.temperature,
-                'humidity': msg.humidity,
                 'distance_front': msg.distance_front,
                 'distance_left': msg.distance_left,
                 'distance_right': msg.distance_right,
-                'wifi_signal': msg.wifi_signal,
                 'cpu_usage': msg.cpu_usage,
-                'memory_usage': msg.memory_usage,
                 'camera_status': msg.camera_status,
                 'imu_values': {
                     'x': msg.imu_values.x,
@@ -251,6 +203,9 @@ class RobotGUIROS2Node(Node):
     def _vila_analysis_callback(self, msg: VILAAnalysis):
         """Handle VILA analysis results"""
         try:
+            # Track VILA activity for model state display
+            self.last_vila_update = time.time()
+            
             analysis_data = {
                 'robot_id': msg.robot_id,
                 'prompt': msg.prompt,
@@ -286,10 +241,13 @@ class RobotGUIROS2Node(Node):
             ack_data = {
                 'robot_id': msg.robot_id,
                 'command_type': msg.command_type,
+                'linear_x': msg.linear_x,
+                'linear_y': msg.linear_y,
+                'angular_z': msg.angular_z,
+                'duration': msg.duration,
                 'parameters': json.loads(msg.parameters_json) if msg.parameters_json else {},
                 'timestamp': msg.timestamp_ns,
-                'success': msg.safety_confirmed,  # Using safety_confirmed as success indicator
-                'source': msg.source
+                'source_node': msg.source_node
             }
             
             self.gui_callback('command_ack', ack_data)
@@ -308,12 +266,29 @@ class RobotGUIROS2Node(Node):
             command_msg = RobotCommand()
             command_msg.robot_id = self.robot_id
             command_msg.command_type = command_type
+            
+            # Set movement parameters based on command type
+            if command_type == "move_forward":
+                command_msg.linear_x = parameters.get('speed', 0.2)
+                command_msg.duration = parameters.get('duration', 1.0)
+            elif command_type == "move_backward":
+                command_msg.linear_x = -parameters.get('speed', 0.2)
+                command_msg.duration = parameters.get('duration', 1.0)
+            elif command_type == "turn_left":
+                command_msg.angular_z = parameters.get('speed', 0.5)
+                command_msg.duration = parameters.get('duration', 1.0)
+            elif command_type == "turn_right":
+                command_msg.angular_z = -parameters.get('speed', 0.5)
+                command_msg.duration = parameters.get('duration', 1.0)
+            elif command_type == "stop":
+                command_msg.linear_x = 0.0
+                command_msg.linear_y = 0.0
+                command_msg.angular_z = 0.0
+                command_msg.duration = 0.0
+            
             command_msg.parameters_json = json.dumps(parameters or {})
             command_msg.timestamp_ns = self.get_clock().now().nanoseconds
-            command_msg.priority = 1
-            command_msg.safety_confirmed = safety_confirmed
-            command_msg.gui_movement_enabled = True  # GUI-initiated command
-            command_msg.source = "GUI"
+            command_msg.source_node = "robot_gui_node"
             
             # Create service request
             request = ExecuteCommand.Request()
@@ -504,9 +479,18 @@ class RobotGUIROS2:
     
     def _create_gui(self):
         """Create the main GUI"""
-        # Create notebook for tabs
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Main container with tabs on left and system status on right
+        main_container = ttk.Frame(self.root)
+        main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Create notebook for tabs (left side)
+        self.notebook = ttk.Notebook(main_container)
+        self.notebook.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        # System Status frame (always visible on right)
+        self.system_status_frame = ttk.LabelFrame(main_container, text="System Status", padding=10)
+        self.system_status_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
+        self._create_system_status_panel()
         
         # Control tab
         self.control_frame = ttk.Frame(self.notebook)
@@ -526,6 +510,26 @@ class RobotGUIROS2:
         # Status bar
         self._create_status_bar()
     
+    def _create_system_status_panel(self):
+        """Create the always-visible system status panel"""
+        # System status displays
+        self.sensor_labels = {}
+        sensor_names = [
+            ("Robot Status", "robot_status", ""),
+            ("Battery Voltage", "battery_voltage", "V"),
+            ("Temperature", "temperature", "°C"),
+            ("Distance Front", "distance_front", "m"),
+            ("Distance Left", "distance_left", "m"),
+            ("Distance Right", "distance_right", "m"),
+            ("VILA Model", "vila_model_state", "")
+        ]
+        
+        for i, (name, key, unit) in enumerate(sensor_names):
+            ttk.Label(self.system_status_frame, text=f"{name}:").grid(row=i, column=0, sticky=tk.W, pady=2)
+            label = ttk.Label(self.system_status_frame, text="---")
+            label.grid(row=i, column=1, sticky=tk.W, padx=10, pady=2)
+            self.sensor_labels[key] = (label, unit)
+    
     def _create_control_tab(self):
         """Create robot control tab"""
         # Robot info frame
@@ -542,22 +546,12 @@ class RobotGUIROS2:
         self.connection_label = ttk.Label(info_frame, text="ROS2 Active", foreground="green")
         self.connection_label.grid(row=0, column=3, sticky=tk.W, padx=10)
         
-        # Battery status
-        ttk.Label(info_frame, text="Battery:").grid(row=1, column=0, sticky=tk.W)
-        self.battery_label = ttk.Label(info_frame, text="---%")
-        self.battery_label.grid(row=1, column=1, sticky=tk.W, padx=10)
-        
-        # Robot status
-        ttk.Label(info_frame, text="Status:").grid(row=1, column=2, sticky=tk.W, padx=(20, 0))
-        self.status_label = ttk.Label(info_frame, text="Unknown")
-        self.status_label.grid(row=1, column=3, sticky=tk.W, padx=10)
-        
         # Movement controls frame
         movement_frame = ttk.LabelFrame(self.control_frame, text="Movement Controls", padding=10)
         movement_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        # Safety toggle
-        self.safety_var = tk.BooleanVar(value=True)
+        # Safety toggle - Start with movement disabled
+        self.safety_var = tk.BooleanVar(value=False)
         self.safety_checkbox = ttk.Checkbutton(
             movement_frame, 
             text="Movement Enabled", 
@@ -600,37 +594,12 @@ class RobotGUIROS2:
     
     def _create_monitoring_tab(self):
         """Create monitoring tab"""
-        # Camera frame
+        # Camera frame (now takes full width since system status is always visible)
         camera_frame = ttk.LabelFrame(self.monitoring_frame, text="Camera Feed", padding=10)
-        camera_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        camera_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         self.camera_label = ttk.Label(camera_frame, text="No camera feed")
         self.camera_label.pack(expand=True)
-        
-        # Sensor frame
-        sensor_frame = ttk.LabelFrame(self.monitoring_frame, text="Sensor Data", padding=10)
-        sensor_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
-        
-        # Sensor displays
-        self.sensor_labels = {}
-        sensor_names = [
-            ("Battery Voltage", "battery_voltage", "V"),
-            ("Battery %", "battery_percentage", "%"),
-            ("Temperature", "temperature", "°C"),
-            ("Humidity", "humidity", "%"),
-            ("Distance Front", "distance_front", "m"),
-            ("Distance Left", "distance_left", "m"),
-            ("Distance Right", "distance_right", "m"),
-            ("CPU Usage", "cpu_usage", "%"),
-            ("Memory Usage", "memory_usage", "%"),
-            ("WiFi Signal", "wifi_signal", "dBm")
-        ]
-        
-        for i, (name, key, unit) in enumerate(sensor_names):
-            ttk.Label(sensor_frame, text=f"{name}:").grid(row=i, column=0, sticky=tk.W, pady=2)
-            label = ttk.Label(sensor_frame, text="---")
-            label.grid(row=i, column=1, sticky=tk.W, padx=10, pady=2)
-            self.sensor_labels[key] = (label, unit)
     
     def _create_vila_tab(self):
         """Create VILA analysis tab"""
@@ -716,19 +685,20 @@ class RobotGUIROS2:
         """Update robot status display"""
         self.robot_data = data
         
-        # Update labels
-        if 'battery_level' in data:
-            self.battery_label.config(text=f"{data['battery_level']:.1f}%")
-        
-        if 'status' in data:
-            self.status_label.config(text=data['status'].title())
-        
         # Update connection status
         self.connection_label.config(text="ROS2 Connected", foreground="green")
+        
+        # Update robot status in system status panel
+        if 'status' in data and 'robot_status' in self.sensor_labels:
+            status_label, unit = self.sensor_labels['robot_status']
+            status_label.config(text=f"{data['status'].title()} {unit}")
     
     def _update_sensor_data(self, data):
         """Update sensor data display"""
         self.sensor_data = data
+        
+        # Add VILA model state to data
+        data['vila_model_state'] = self._get_vila_model_state()
         
         # Update sensor labels
         for key, (label, unit) in self.sensor_labels.items():
@@ -738,6 +708,21 @@ class RobotGUIROS2:
                     label.config(text=f"{value:.2f} {unit}")
                 else:
                     label.config(text=f"{value} {unit}")
+    
+    def _get_vila_model_state(self):
+        """Get current VILA model state"""
+        try:
+            # Check if we have recent VILA analysis (within last 30 seconds)
+            if hasattr(self, 'last_vila_update') and self.last_vila_update:
+                time_diff = time.time() - self.last_vila_update
+                if time_diff < 30:
+                    return "Active"
+                else:
+                    return "Idle"
+            else:
+                return "Ready"
+        except Exception:
+            return "Unknown"
     
     def _update_camera_image(self, pil_image):
         """Update camera image display"""
@@ -834,10 +819,26 @@ class RobotGUIROS2:
     def cleanup(self):
         """Cleanup ROS2 resources"""
         try:
-            self.ros_node.destroy_node()
-            rclpy.shutdown()
+            logger.info("🔄 Shutting down Robot GUI...")
+            
+            # Stop ROS2 spinning if it's running
+            if hasattr(self, 'ros_thread') and self.ros_thread.is_alive():
+                logger.info("Stopping ROS2 thread...")
+                
+            # Destroy ROS2 node
+            if hasattr(self, 'ros_node') and self.ros_node:
+                logger.info("Destroying ROS2 node...")
+                self.ros_node.destroy_node()
+                
+            # Shutdown ROS2
+            if rclpy.ok():
+                logger.info("Shutting down ROS2...")
+                rclpy.shutdown()
+                
+            logger.info("✅ Robot GUI shutdown complete")
+            
         except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+            logger.error(f"❌ Error during cleanup: {e}")
 
 def main():
     """Main application entry point"""
@@ -848,22 +849,40 @@ def main():
         
         # Handle window closing
         def on_closing():
-            app.cleanup()
-            root.destroy()
+            logger.info("🚪 Window close requested")
+            try:
+                app.cleanup()
+                root.quit()  # Exit mainloop
+                root.destroy()  # Destroy window
+            except Exception as e:
+                logger.error(f"Error during window close: {e}")
+                root.quit()
         
         root.protocol("WM_DELETE_WINDOW", on_closing)
+        
+        # Start GUI main loop
+        logger.info("🖥️ Starting Robot GUI main loop...")
         root.mainloop()
         
     except KeyboardInterrupt:
-        print("Application interrupted by user")
+        logger.info("⚠️ Application interrupted by user")
     except Exception as e:
-        print(f"Application error: {e}")
+        logger.error(f"❌ Application error: {e}")
     finally:
         try:
             if 'app' in locals():
                 app.cleanup()
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"❌ Final cleanup error: {e}")
+        
+        # Force exit if ROS2 is still running
+        if rclpy.ok():
+            try:
+                rclpy.shutdown()
+            except:
+                pass
+                
+        logger.info("👋 Robot GUI application exited")
 
 if __name__ == '__main__':
     main()

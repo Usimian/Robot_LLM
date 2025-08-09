@@ -85,6 +85,52 @@
                 "clear": false
             },
             "detail": "Clean and build entire ROS 2 workspace (handles dependencies automatically)"
+        },
+        {
+            "label": "launch client system",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "source ~/.bashrc && source install/setup.bash && ros2 launch robot_vila_system client_system.launch.py"
+            ],
+            "group": "test",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "dedicated",
+                "showReuseMessage": false,
+                "clear": true
+            },
+            "detail": "Launch complete ROS2 client system (GUI, VILA, gateway validator)",
+            "problemMatcher": [],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        },
+        {
+            "label": "launch sensor simulator",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "source ~/.bashrc && source install/setup.bash && ros2 launch robot_vila_system sensor_simulator.launch.py"
+            ],
+            "group": "test",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "dedicated",
+                "showReuseMessage": false,
+                "clear": true
+            },
+            "detail": "Launch sensor simulator for testing when robot is not available",
+            "problemMatcher": [],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
         }
     ],
     "inputs": [
