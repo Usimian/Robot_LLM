@@ -24,7 +24,7 @@ import configparser
 # ROS2 message imports
 from robot_msgs.msg import RobotCommand, SensorData, VILAAnalysis
 from robot_msgs.srv import ExecuteCommand, RequestVILAAnalysis
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, Imu
 from std_msgs.msg import String, Bool
 from geometry_msgs.msg import Twist
 
@@ -82,6 +82,9 @@ class RobotVILAServerROS2(Node):
             port=self.config.get('robot_port', 8080),
             last_seen=datetime.now()
         )
+        
+        # Store latest IMU data separately
+        self.latest_imu_data = None
         
         # Command queue for single robot [[memory:5366669]]
         self.command_queue = queue.Queue()
@@ -170,7 +173,7 @@ class RobotVILAServerROS2(Node):
         # Navigation commands (for GUI/monitoring)
         self.navigation_publisher = self.create_publisher(
             String,
-            '/vila/navigation_commands',
+            '/robot/navigation_commands',
             self.best_effort_qos
         )
     
@@ -189,6 +192,14 @@ class RobotVILAServerROS2(Node):
             Image,
             '/robot/camera/image_raw',
             self._image_callback,
+            self.best_effort_qos
+        )
+        
+        # IMU data from robot
+        self.imu_subscriber = self.create_subscription(
+            Imu,
+            '/imu/data_raw',
+            self._imu_callback,
             self.best_effort_qos
         )
         
@@ -220,7 +231,7 @@ class RobotVILAServerROS2(Node):
         # VILA analysis service
         self.vila_analysis_service = self.create_service(
             RequestVILAAnalysis,
-            '/vila/analyze',
+            '/vila/request_analysis',
             self._vila_analysis_service
         )
     
@@ -242,25 +253,49 @@ class RobotVILAServerROS2(Node):
         self.robot_info.last_seen = datetime.now()
         self.robot_info.status = "active"
         
-        # Store sensor data
+        # Store sensor data (IMU data now comes from /imu/data_raw topic)
         self.robot_info.sensor_data = {
             'battery_voltage': msg.battery_voltage,
-            'temperature': msg.temperature,
+            'cpu_temp': msg.cpu_temp,
             'distance_front': msg.distance_front,
             'distance_left': msg.distance_left,
             'distance_right': msg.distance_right,
             'cpu_usage': msg.cpu_usage,
-            'imu_values': {
-                'x': msg.imu_values.x,
-                'y': msg.imu_values.y,
-                'z': msg.imu_values.z
-            },
             'camera_status': msg.camera_status,
             'timestamp': msg.timestamp_ns
         }
         
         # Publish status update
         self._publish_robot_status()
+    
+    def _imu_callback(self, msg: Imu):
+        """Handle IMU data from robot"""
+        try:
+            # Store latest IMU data
+            self.latest_imu_data = {
+                'orientation': {
+                    'x': msg.orientation.x,
+                    'y': msg.orientation.y,
+                    'z': msg.orientation.z,
+                    'w': msg.orientation.w
+                },
+                'angular_velocity': {
+                    'x': msg.angular_velocity.x,
+                    'y': msg.angular_velocity.y,
+                    'z': msg.angular_velocity.z
+                },
+                'linear_acceleration': {
+                    'x': msg.linear_acceleration.x,
+                    'y': msg.linear_acceleration.y,
+                    'z': msg.linear_acceleration.z
+                },
+                'timestamp': msg.header.stamp.sec * 1000000000 + msg.header.stamp.nanosec
+            }
+            
+            self.get_logger().debug("📊 IMU data updated")
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ Error processing IMU data: {e}")
     
     def _image_callback(self, msg: Image):
         """Handle camera images from robot - trigger automatic VILA analysis"""
@@ -299,7 +334,7 @@ Keep it concise for real-time navigation."""
             analysis_msg = VILAAnalysis()
             analysis_msg.robot_id = self.robot_info.robot_id
             analysis_msg.prompt = navigation_prompt
-            analysis_msg.image = image_msg
+
             analysis_msg.analysis_result = response
             analysis_msg.navigation_commands_json = json.dumps(nav_commands)
             analysis_msg.confidence = nav_commands.get('confidence', 0.0)
@@ -397,7 +432,7 @@ Keep it concise for real-time navigation."""
         try:
             command = request.command
             
-            self.get_logger().info(f"🎯 COMMAND GATEWAY: Processing {command.command_type} from {command.source}")
+            self.get_logger().info(f"🎯 COMMAND GATEWAY: Processing {command.command_type} from {command.source_node}")
             
             # Safety validation
             if not self._validate_command_safety(command):
@@ -503,6 +538,32 @@ Keep it concise for real-time navigation."""
                 continue
             except Exception as e:
                 self.get_logger().error(f"❌ Error processing command: {e}")
+    
+    def _publish_robot_status(self):
+        """Publish robot status information"""
+        try:
+            # Create robot status message
+            status_msg = String()
+            status_data = {
+                'robot_id': self.robot_info.robot_id,
+                'status': self.robot_info.status,
+                'last_seen': self.robot_info.last_seen.isoformat(),
+                'model_loaded': self.model_loaded,
+                'safety_enabled': self.safety_enabled,
+                'gui_movement_enabled': self.gui_movement_enabled
+            }
+            
+            if self.robot_info.sensor_data:
+                status_data['sensor_data'] = self.robot_info.sensor_data
+            
+            status_msg.data = json.dumps(status_data)
+            
+            # Publish status (assuming we have a status publisher)
+            # Note: This would need a status publisher to be set up in _setup_publishers()
+            self.get_logger().debug(f"📊 Robot status updated: {self.robot_info.status}")
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ Error publishing robot status: {e}")
     
 
 

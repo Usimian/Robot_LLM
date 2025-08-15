@@ -19,9 +19,8 @@ This document describes the ROS2-based communication architecture for the Robot 
 robot_msgs/                    # Message and service definitions
 ├── msg/
 │   ├── RobotCommand.msg      # Robot command structure
-│   ├── SensorData.msg        # Sensor data structure
-│   ├── VILAAnalysis.msg      # VILA analysis results
-│   └── RobotStatus.msg       # Robot status information
+│   ├── SensorData.msg        # Sensor data and status structure
+│   └── VILAAnalysis.msg      # VILA analysis results
 └── srv/
     ├── ExecuteCommand.srv    # Command execution service
     └── RequestVILAAnalysis.srv # VILA analysis service
@@ -38,8 +37,8 @@ robot_vila_system/            # Main system nodes
 
 #### Robot Data and Control
 ```bash
-# Robot data (published by robot_client)
-/robot/sensors                              # SensorData messages
+# Robot data and status (published by robot_client)
+/robot/sensors                              # SensorData messages (includes status)
 
 # Command flow (single gateway)
 /robot/commands                             # RobotCommand messages
@@ -97,16 +96,15 @@ string source_node                 # Originating node name
 
 ### SensorData.msg
 ```yaml
-# Sensor data from robot
+# Sensor data and robot status from robot
 string robot_id                    # Robot identifier
 float64 battery_voltage            # Battery voltage (V)
-float64 temperature                # Jetson CPU Temperature (°C)
+float64 cpu_temp                   # Jetson CPU Temperature (°C)
 float64 distance_front             # Front distance sensor (m)
 float64 distance_left              # Left distance sensor (m)
 float64 distance_right             # Right distance sensor (m)
 float64 cpu_usage                  # CPU usage (%)
 string camera_status               # Camera status
-geometry_msgs/Vector3 imu_values   # IMU readings (x, y, z)
 int64 timestamp_ns                 # Sensor reading timestamp
 ```
 
@@ -203,13 +201,13 @@ graph LR
 ### robot_client_node
 - **Purpose**: Hardware interface for robot
 - **Subscribes**: Command execution results
-- **Publishes**: Sensor data, status, camera feed
+- **Publishes**: Sensor data (includes robot status), camera feed
 - **Services**: None (receives commands only)
 - **Key Function**: Interfaces with physical robot hardware
 
 ### robot_gui_node
 - **Purpose**: User interface and monitoring
-- **Subscribes**: Robot sensor data, VILA results
+- **Subscribes**: Robot sensor data (includes status), VILA results
 - **Publishes**: User-initiated commands
 - **Services**: Calls execute_command and request_analysis
 - **Key Function**: Provides human operator interface
@@ -244,9 +242,9 @@ graph LR
 
 ### 3. System Monitoring
 ```
-1. robot_client continuously publishes sensor data
+1. robot_client continuously publishes sensor data (includes robot status)
 2. All nodes subscribe to relevant sensor topics
-3. GUI displays real-time sensor data
+3. GUI displays real-time sensor data and robot status
 4. gateway_validator monitors for command violations
 5. Any direct /cmd_vel publishing triggers alerts
 ```
@@ -275,8 +273,50 @@ graph LR
 
 ### Network Configuration
 - **RMW**: `rmw_fastrtps_cpp`
-- **Discovery**: FastDDS with unicast configuration
+- **Discovery**: FastDDS with **multicast discovery** (working)
+- **Multicast Groups**: 
+  - Default multicast group: `239.255.0.1:7400`
+  - Automatic peer discovery across network segments
 - **QoS**: Reliable for commands, best-effort for sensor data
+- **Cross-Platform**: Jetson Orin Nano (ARM64) ↔ Ubuntu 22.04 PC (AMD64)
+
+## Multicast Discovery Implementation ✅
+
+### Status: **WORKING**
+The ROS2 multicast discovery has been successfully implemented and tested between the Jetson Orin Nano robot and the Ubuntu 22.04 client PC.
+
+### Key Benefits
+- **Automatic Discovery**: Nodes automatically discover each other across the network
+- **No Manual Configuration**: No need to specify peer IP addresses
+- **Network Resilience**: Handles network changes and reconnections gracefully
+- **Cross-Architecture**: Works seamlessly between ARM64 (Jetson) and AMD64 (PC)
+
+### Implementation Details
+```bash
+# FastDDS uses default multicast configuration
+# No custom XML configuration required
+# Default multicast group: 239.255.0.1:7400
+# Discovery works across network segments
+```
+
+### Verification Commands
+```bash
+# Check ROS2 nodes across network
+ros2 node list
+
+# Monitor cross-network topic communication  
+ros2 topic list
+ros2 topic echo /robot/sensors
+
+# Verify service discovery
+ros2 service list | grep robot
+```
+
+### Network Requirements Met
+- ✅ Multicast traffic allowed on network
+- ✅ Firewall configured for ROS2 ports
+- ✅ Same ROS2 domain ID on both systems
+- ✅ FastDDS multicast discovery enabled (default)
 
 ## Development Guidelines
 
@@ -316,8 +356,12 @@ ros2 service list
 1. **Commands not executing**: Check execute_command service availability
 2. **Gateway violations**: Ensure no direct /cmd_vel publishing
 3. **VILA not responding**: Verify VILA model loading
-4. **Sensor data missing**: Check robot_client node and /robot/sensors topic
+4. **Sensor data/status missing**: Check robot_client node and /robot/sensors topic
 5. **GUI not updating**: Verify ROS2 topic subscriptions
+6. **Cross-network discovery failing**: 
+   - Verify multicast is enabled on network
+   - Check ROS2 domain ID matches on both systems
+   - Ensure firewall allows multicast traffic (239.255.0.1:7400)
 
 ### Diagnostic Commands
 ```bash
@@ -329,6 +373,15 @@ ros2 service call /robot/execute_command robot_msgs/srv/ExecuteCommand "{command
 
 # Monitor system health
 ros2 topic hz /robot/sensors
+
+# Multicast discovery diagnostics
+ros2 doctor --report  # Check ROS2 system health
+ros2 topic list       # Verify cross-network topic discovery
+ros2 node info /node_name  # Check node connectivity
+
+# Network multicast testing
+ping -c 3 239.255.0.1  # Test multicast connectivity
+netstat -g             # Show multicast group memberships
 ```
 
 ---
@@ -341,5 +394,9 @@ This ROS2-based communication system provides:
 - ✅ **VILA AI integration** with vision processing
 - ✅ **Comprehensive validation** and safety features
 - ✅ **Scalable architecture** using standard ROS2 patterns
+- ✅ **Automatic multicast discovery** between Jetson and PC
+- ✅ **Cross-platform communication** (ARM64 ↔ AMD64)
 
 **Key Principle**: ALL robot communication flows through ROS2 topics and services, with command execution centralized through the single gateway service to ensure coordinated, safe, and auditable robot control.
+
+**Network Success**: Multicast discovery is fully operational, enabling seamless automatic node discovery across the robot (Jetson Orin Nano) and client PC (Ubuntu 22.04) without manual configuration.

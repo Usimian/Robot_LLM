@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ROS2 Launch file for the client system
-Launches the complete robot client system including GUI and VILA processing
+Launches VILA-related nodes that must run on the client PC where VILA model is available
 """
 
 from launch import LaunchDescription
@@ -11,19 +11,13 @@ from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition
 
 def generate_launch_description():
-    """Generate launch description for client system"""
+    """Generate launch description for client system - VILA nodes only"""
     
     # Launch arguments
     robot_id_arg = DeclareLaunchArgument(
         'robot_id',
-        default_value='robot_001',
+        default_value='yahboomcar_x3_01',
         description='Robot ID to connect to'
-    )
-    
-    gui_enabled_arg = DeclareLaunchArgument(
-        'gui',
-        default_value='true',
-        description='Enable GUI interface'
     )
     
     vila_enabled_arg = DeclareLaunchArgument(
@@ -32,26 +26,18 @@ def generate_launch_description():
         description='Enable VILA vision processing'
     )
     
-    # Get launch configurations
-    robot_id = LaunchConfiguration('robot_id')
-    gui_enabled = LaunchConfiguration('gui')
-    vila_enabled = LaunchConfiguration('vila')
-    
-    # Robot GUI Node
-    robot_gui_node = Node(
-        package='robot_vila_system',
-        executable='robot_gui_node.py',
-        name='robot_gui',
-        namespace='client',
-        parameters=[{
-            'robot_id': robot_id,
-        }],
-        output='screen',
-        emulate_tty=True,
-        condition=IfCondition(gui_enabled)
+    gui_enabled_arg = DeclareLaunchArgument(
+        'gui',
+        default_value='true',
+        description='Enable GUI interface'
     )
     
-    # VILA Server Node
+    # Get launch configurations
+    robot_id = LaunchConfiguration('robot_id')
+    vila_enabled = LaunchConfiguration('vila')
+    gui_enabled = LaunchConfiguration('gui')
+    
+    # VILA Server Node (runs on client - has direct access to VILA model)
     vila_server_node = Node(
         package='robot_vila_system',
         executable='vila_server_node.py',
@@ -65,7 +51,7 @@ def generate_launch_description():
         condition=IfCondition(vila_enabled)
     )
     
-    # VILA Vision Node
+    # VILA Vision Node (runs on client - has direct access to VILA model)
     vila_vision_node = Node(
         package='robot_vila_system',
         executable='vila_vision_node.py',
@@ -79,31 +65,32 @@ def generate_launch_description():
         condition=IfCondition(vila_enabled)
     )
     
-    # Gateway Validator Node
-    gateway_validator_node = Node(
+    # Robot GUI Node (runs on client - displays the control interface)
+    robot_gui_node = Node(
         package='robot_vila_system',
-        executable='gateway_validator_node.py',
-        name='gateway_validator',
+        executable='robot_gui_node.py',
+        name='robot_gui',
         namespace='client',
         parameters=[{
             'robot_id': robot_id,
         }],
         output='screen',
         emulate_tty=True,
+        condition=IfCondition(gui_enabled)
     )
     
     return LaunchDescription([
         robot_id_arg,
-        gui_enabled_arg,
         vila_enabled_arg,
+        gui_enabled_arg,
         
-        LogInfo(msg='🚀 Starting Robot Client System...'),
+        LogInfo(msg='🚀 Starting Client System...'),
         LogInfo(msg=['Target Robot ID: ', robot_id]),
-        LogInfo(msg=['GUI Enabled: ', gui_enabled]),
         LogInfo(msg=['VILA Enabled: ', vila_enabled]),
+        LogInfo(msg=['GUI Enabled: ', gui_enabled]),
+        LogInfo(msg='📝 Complete client system with GUI and VILA processing'),
         
-        gateway_validator_node,
-        robot_gui_node,
         vila_server_node,
         vila_vision_node,
+        robot_gui_node,
     ])

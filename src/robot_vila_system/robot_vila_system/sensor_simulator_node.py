@@ -89,13 +89,12 @@ class SensorSimulatorNode(Node):
         """Initialize all sensor data"""
         self.sensor_data = {
             "battery_voltage": 12.4,
-            "temperature": 45.0,  # Jetson CPU temperature
+            "cpu_temp": 45.0,  # Jetson CPU temperature
             "distance_front": 1.5,
             "distance_left": 0.8,
             "distance_right": 1.2,
             "cpu_usage": 25.0,
-            "camera_status": "Active" if self.camera_enabled else "Disabled",
-            "imu_values": {"x": 0.0, "y": 0.0, "z": 0.0}
+            "camera_status": "Active" if self.camera_enabled else "Disabled"
         }
         
         # Keep battery percentage for internal simulation logic
@@ -139,7 +138,7 @@ class SensorSimulatorNode(Node):
         base_time = self.simulation_time
         
         # Jetson CPU temperature (30-65°C range)
-        self.sensor_data["temperature"] = 45.0 + 10.0 * math.sin(base_time * 0.1)
+        self.sensor_data["cpu_temp"] = 45.0 + 10.0 * math.sin(base_time * 0.1)
         
         # Distance sensors
         self.sensor_data["distance_front"] = 1.5 + 0.5 * math.sin(base_time * 0.3)
@@ -149,10 +148,7 @@ class SensorSimulatorNode(Node):
         # CPU usage
         self.sensor_data["cpu_usage"] = 30.0 + 10.0 * math.sin(base_time * 0.15)
         
-        # IMU simulation
-        self.sensor_data["imu_values"]["x"] = 0.1 * math.sin(base_time * 0.5)
-        self.sensor_data["imu_values"]["y"] = 0.1 * math.cos(base_time * 0.4)
-        self.sensor_data["imu_values"]["z"] = 9.8 + 0.2 * math.sin(base_time * 0.1)
+        # IMU simulation removed - now using /imu/data_raw topic
         
         # Update robot status based on battery level
         if self.battery_percentage < 10.0:
@@ -171,18 +167,14 @@ class SensorSimulatorNode(Node):
             sensor_msg = SensorData()
             sensor_msg.robot_id = self.robot_id
             sensor_msg.battery_voltage = self.sensor_data["battery_voltage"]
-            sensor_msg.temperature = self.sensor_data["temperature"]
+            sensor_msg.cpu_temp = self.sensor_data["cpu_temp"]
             sensor_msg.distance_front = self.sensor_data["distance_front"]
             sensor_msg.distance_left = self.sensor_data["distance_left"]
             sensor_msg.distance_right = self.sensor_data["distance_right"]
             sensor_msg.cpu_usage = self.sensor_data["cpu_usage"]
             sensor_msg.camera_status = self.sensor_data["camera_status"]
             
-            # IMU values
-            sensor_msg.imu_values = Vector3()
-            sensor_msg.imu_values.x = self.sensor_data["imu_values"]["x"]
-            sensor_msg.imu_values.y = self.sensor_data["imu_values"]["y"]
-            sensor_msg.imu_values.z = self.sensor_data["imu_values"]["z"]
+            # IMU values removed - now using /imu/data_raw topic
             
             sensor_msg.timestamp_ns = self.get_clock().now().nanoseconds
             

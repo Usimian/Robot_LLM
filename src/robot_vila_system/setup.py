@@ -33,7 +33,6 @@ setup(
         'console_scripts': [
             'vila_server_node.py = robot_vila_system.vila_server_node:main',
             'vila_vision_node.py = robot_vila_system.vila_vision_node:main',
-            'robot_client_node.py = robot_vila_system.robot_client_node:main',
             'robot_gui_node.py = robot_vila_system.robot_gui_node:main',
             'gateway_validator_node.py = robot_vila_system.gateway_validator_node:main',
             'sensor_simulator_node.py = robot_vila_system.sensor_simulator_node:main',

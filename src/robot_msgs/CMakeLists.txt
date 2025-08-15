@@ -17,7 +17,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotCommand.msg"
   "msg/SensorData.msg"
   "msg/VILAAnalysis.msg"
-  "msg/RobotStatus.msg"
   "srv/ExecuteCommand.srv"
   "srv/RequestVILAAnalysis.srv"
   DEPENDENCIES std_msgs sensor_msgs geometry_msgs

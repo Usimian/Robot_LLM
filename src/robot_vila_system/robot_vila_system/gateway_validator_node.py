@@ -12,6 +12,7 @@ from datetime import datetime
 from robot_msgs.msg import RobotCommand
 from robot_msgs.srv import ExecuteCommand
 from geometry_msgs.msg import Twist
+from std_msgs.msg import String
 
 class CommandGatewayValidator(Node):
     """
@@ -33,6 +34,9 @@ class CommandGatewayValidator(Node):
         
         # Monitor all command-related topics
         self._setup_monitoring()
+        
+        # Setup system monitoring publishers
+        self._setup_system_monitoring()
         
         # Validation timer
         self.validation_timer = self.create_timer(5.0, self._validate_gateway_integrity)
@@ -72,6 +76,27 @@ class CommandGatewayValidator(Node):
         
         self.get_logger().info("📊 Monitoring all command channels for gateway compliance")
     
+    def _setup_system_monitoring(self):
+        """Setup system monitoring publishers per specification"""
+        
+        # Gateway violations publisher
+        self.violations_publisher = self.create_publisher(
+            String,
+            '/system/gateway_violations',
+            10
+        )
+        
+        # Command statistics publisher
+        self.statistics_publisher = self.create_publisher(
+            String,
+            '/system/command_statistics',
+            10
+        )
+        
+        self.get_logger().info("📊 System monitoring topics configured")
+        self.get_logger().info("   └── /system/gateway_violations")
+        self.get_logger().info("   └── /system/command_statistics")
+    
     def _gateway_command_callback(self, msg: RobotCommand):
         """Monitor legitimate commands from gateway"""
         self.command_sources['gateway'] += 1
@@ -84,6 +109,21 @@ class CommandGatewayValidator(Node):
     def _direct_cmd_vel_callback(self, msg: Twist):
         """Detect direct cmd_vel publishing (VIOLATION)"""
         self.command_sources['direct'] += 1
+        
+        # Publish violation to system monitoring topic
+        violation_data = {
+            'timestamp': datetime.now().isoformat(),
+            'violation_type': 'direct_cmd_vel',
+            'details': {
+                'linear_x': msg.linear.x,
+                'angular_z': msg.angular.z
+            },
+            'message': 'Direct /cmd_vel command bypasses single gateway'
+        }
+        
+        violation_msg = String()
+        violation_msg.data = json.dumps(violation_data)
+        self.violations_publisher.publish(violation_msg)
         
         self.get_logger().error("🚨 GATEWAY VIOLATION: Direct /cmd_vel command detected!")
         self.get_logger().error("   └── This bypasses the single command gateway")
@@ -134,6 +174,23 @@ class CommandGatewayValidator(Node):
         gateway_percent = (self.command_sources['gateway'] / total_commands) * 100
         direct_percent = (self.command_sources['direct'] / total_commands) * 100
         bypass_percent = (self.command_sources['bypass'] / total_commands) * 100
+        
+        # Publish statistics to system monitoring topic
+        statistics_data = {
+            'timestamp': datetime.now().isoformat(),
+            'total_commands': total_commands,
+            'command_sources': self.command_sources.copy(),
+            'percentages': {
+                'gateway': gateway_percent,
+                'direct': direct_percent,
+                'bypass': bypass_percent
+            },
+            'compliance_status': 'COMPLIANT' if (self.command_sources['direct'] == 0 and self.command_sources['bypass'] == 0) else 'VIOLATION'
+        }
+        
+        statistics_msg = String()
+        statistics_msg.data = json.dumps(statistics_data)
+        self.statistics_publisher.publish(statistics_msg)
         
         # Report statistics
         self.get_logger().info("📊 GATEWAY INTEGRITY REPORT:")

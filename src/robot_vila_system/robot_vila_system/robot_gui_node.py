@@ -29,7 +29,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 # ROS2 message imports
 from robot_msgs.msg import RobotCommand, SensorData, VILAAnalysis
 from robot_msgs.srv import ExecuteCommand, RequestVILAAnalysis
-from sensor_msgs.msg import Image as RosImage
+from sensor_msgs.msg import Image as RosImage, Imu
 from std_msgs.msg import String, Bool
 from cv_bridge import CvBridge
 
@@ -47,6 +47,7 @@ class RobotGUIROS2Node(Node):
         self.robot_id = "yahboomcar_x3_01"  # Hardcoded for single robot system
         self.bridge = CvBridge()
         self.last_vila_update = None  # Track VILA model activity
+        self.latest_imu_data = None  # Store latest IMU data
         
         # QoS profiles
         self.reliable_qos = QoSProfile(
@@ -98,8 +99,16 @@ class RobotGUIROS2Node(Node):
         # Navigation commands
         self.navigation_subscriber = self.create_subscription(
             String,
-            '/vila/navigation_commands',
+            '/robot/navigation_commands',
             self._navigation_commands_callback,
+            self.best_effort_qos
+        )
+        
+        # IMU data for acceleration display
+        self.imu_subscriber = self.create_subscription(
+            Imu,
+            '/imu/data_raw',
+            self._imu_callback,
             self.best_effort_qos
         )
         
@@ -153,7 +162,7 @@ class RobotGUIROS2Node(Node):
         # VILA analysis service
         self.vila_analysis_client = self.create_client(
             RequestVILAAnalysis,
-            '/vila/analyze_image'
+            '/vila/analyze'
         )
     
 
@@ -164,17 +173,12 @@ class RobotGUIROS2Node(Node):
             sensor_data = {
                 'robot_id': msg.robot_id,
                 'battery_voltage': msg.battery_voltage,
-                'temperature': msg.temperature,
+                'cpu_temp': msg.cpu_temp,
                 'distance_front': msg.distance_front,
                 'distance_left': msg.distance_left,
                 'distance_right': msg.distance_right,
                 'cpu_usage': msg.cpu_usage,
                 'camera_status': msg.camera_status,
-                'imu_values': {
-                    'x': msg.imu_values.x,
-                    'y': msg.imu_values.y,
-                    'z': msg.imu_values.z
-                },
                 'timestamp': msg.timestamp_ns
             }
             
@@ -183,6 +187,23 @@ class RobotGUIROS2Node(Node):
             
         except Exception as e:
             self.get_logger().error(f"Error processing sensor data: {e}")
+    
+    def _imu_callback(self, msg: Imu):
+        """Handle IMU data updates"""
+        try:
+            # Store latest IMU data with acceleration values
+            self.latest_imu_data = {
+                'imu_accel_x': msg.linear_acceleration.x,
+                'imu_accel_y': msg.linear_acceleration.y,
+                'imu_accel_z': msg.linear_acceleration.z,
+                'timestamp': msg.header.stamp.sec * 1000000000 + msg.header.stamp.nanosec
+            }
+            
+            # Send to GUI for display
+            self.gui_callback('imu_data', self.latest_imu_data)
+            
+        except Exception as e:
+            self.get_logger().error(f"Error processing IMU data: {e}")
     
     def _image_callback(self, msg: RosImage):
         """Handle camera image updates"""
@@ -405,9 +426,12 @@ class RobotGUIROS2:
         self.robot_data = {}
         self.sensor_data = {}
         self.current_image = None
+        self.loaded_image = None  # For manually loaded images
         self.vila_analysis = {}
         self.safety_enabled = True
         self.movement_enabled = True
+        self.vila_analysis_enabled = True  # New: VILA analysis switch
+        self.camera_source = "robot"  # "robot", "sim", or "loaded"
         self.update_queue = queue.Queue()
         
         # Create GUI
@@ -419,6 +443,9 @@ class RobotGUIROS2:
         
         # Start GUI update processing
         self._process_updates()
+        
+        # Start system status updates (every 1 second)
+        self._update_system_status()
         
         self.log_message("🤖 Robot GUI ROS2 initialized")
         self.log_message("   └── All communication via ROS2 topics and services")
@@ -436,7 +463,7 @@ class RobotGUIROS2:
             logger.error(f"ROS2 spinning error: {e}")
     
     def _process_updates(self):
-        """Process updates from ROS2 callbacks"""
+        """Process updates from ROS2 callbacks (fast updates for real-time data)"""
         try:
             while not self.update_queue.empty():
                 message_type, data = self.update_queue.get_nowait()
@@ -446,8 +473,44 @@ class RobotGUIROS2:
         except Exception as e:
             logger.error(f"Error processing updates: {e}")
         
-        # Schedule next update
+        # Schedule next update (50ms for responsive ROS message processing)
         self.root.after(50, self._process_updates)
+    
+    def _update_system_status(self):
+        """Update system status display (runs every 1 second)"""
+        try:
+            # Update VILA model state
+            if hasattr(self, 'sensor_data') and self.sensor_data:
+                self.sensor_data['vila_model_state'] = self._get_vila_model_state()
+                
+                # Update robot status based on current sensor data
+                self.sensor_data['robot_status'] = self._determine_robot_status(self.sensor_data)
+                
+                # Update system status labels
+                for key, (label, unit) in self.sensor_labels.items():
+                    if key in self.sensor_data:
+                        value = self.sensor_data[key]
+                        if isinstance(value, (int, float)):
+                            label.config(text=f"{value:.2f} {unit}")
+                        else:
+                            # Special formatting for robot status with colors
+                            if key == 'robot_status':
+                                status_text = f"{value} {unit}".strip()
+                                if value == 'Running':
+                                    label.config(text=status_text, foreground="green")
+                                elif value in ['Offline', 'Error']:
+                                    label.config(text=status_text, foreground="red")
+                                elif value in ['Stale', 'Low Battery', 'High Voltage']:
+                                    label.config(text=status_text, foreground="orange")
+                                else:
+                                    label.config(text=status_text, foreground="black")
+                            else:
+                                label.config(text=f"{value} {unit}")
+        except Exception as e:
+            logger.error(f"Error updating system status: {e}")
+        
+        # Schedule next system status update (1000ms = 1 second)
+        self.root.after(1000, self._update_system_status)
     
     def _handle_ros_update(self, message_type: str, data):
         """Handle different types of ROS2 updates"""
@@ -456,6 +519,8 @@ class RobotGUIROS2:
                 self._update_robot_status(data)
             elif message_type == 'sensor_data':
                 self._update_sensor_data(data)
+            elif message_type == 'imu_data':
+                self._update_imu_data(data)
             elif message_type == 'camera_image':
                 self._update_camera_image(data)
             elif message_type == 'vila_analysis':
@@ -512,23 +577,35 @@ class RobotGUIROS2:
     
     def _create_system_status_panel(self):
         """Create the always-visible system status panel"""
+        # Configure grid column weights to prevent resizing
+        self.system_status_frame.grid_columnconfigure(0, weight=0, minsize=120)
+        self.system_status_frame.grid_columnconfigure(1, weight=1, minsize=100)
+        
         # System status displays
         self.sensor_labels = {}
         sensor_names = [
             ("Robot Status", "robot_status", ""),
             ("Battery Voltage", "battery_voltage", "V"),
-            ("Temperature", "temperature", "°C"),
+            ("CPU Temp", "cpu_temp", "°C"),
+            ("CPU Usage", "cpu_usage", "%"),
             ("Distance Front", "distance_front", "m"),
             ("Distance Left", "distance_left", "m"),
             ("Distance Right", "distance_right", "m"),
+            ("IMU Accel X", "imu_accel_x", "m/s²"),
+            ("IMU Accel Y", "imu_accel_y", "m/s²"),
+            ("IMU Accel Z", "imu_accel_z", "m/s²"),
             ("VILA Model", "vila_model_state", "")
         ]
         
         for i, (name, key, unit) in enumerate(sensor_names):
-            ttk.Label(self.system_status_frame, text=f"{name}:").grid(row=i, column=0, sticky=tk.W, pady=2)
-            label = ttk.Label(self.system_status_frame, text="---")
-            label.grid(row=i, column=1, sticky=tk.W, padx=10, pady=2)
-            self.sensor_labels[key] = (label, unit)
+            # Fixed width label for names
+            name_label = ttk.Label(self.system_status_frame, text=f"{name}:", width=15)
+            name_label.grid(row=i, column=0, sticky=tk.W, pady=2)
+            
+            # Fixed width label for values to prevent resizing
+            value_label = ttk.Label(self.system_status_frame, text="---", width=12, anchor=tk.W)
+            value_label.grid(row=i, column=1, sticky=tk.W, padx=10, pady=2)
+            self.sensor_labels[key] = (value_label, unit)
     
     def _create_control_tab(self):
         """Create robot control tab"""
@@ -594,15 +671,51 @@ class RobotGUIROS2:
     
     def _create_monitoring_tab(self):
         """Create monitoring tab"""
-        # Camera frame (now takes full width since system status is always visible)
+        # Camera frame with controls
         camera_frame = ttk.LabelFrame(self.monitoring_frame, text="Camera Feed", padding=10)
         camera_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
+        # Camera controls frame
+        controls_frame = ttk.Frame(camera_frame)
+        controls_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Camera source selection
+        source_frame = ttk.LabelFrame(controls_frame, text="Camera Source", padding=5)
+        source_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        
+        self.camera_source_var = tk.StringVar(value="robot")
+        ttk.Radiobutton(source_frame, text="Robot Camera", variable=self.camera_source_var, 
+                       value="robot", command=self._on_camera_source_change).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(source_frame, text="Simulator", variable=self.camera_source_var, 
+                       value="sim", command=self._on_camera_source_change).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(source_frame, text="Loaded Image", variable=self.camera_source_var, 
+                       value="loaded", command=self._on_camera_source_change).pack(side=tk.LEFT, padx=5)
+        
+        # Load image button
+        ttk.Button(controls_frame, text="📁 Load Image", 
+                  command=self._load_image_file).pack(side=tk.RIGHT, padx=5)
+        
+        # Camera display
         self.camera_label = ttk.Label(camera_frame, text="No camera feed")
         self.camera_label.pack(expand=True)
     
     def _create_vila_tab(self):
         """Create VILA analysis tab"""
+        # VILA controls frame
+        controls_frame = ttk.LabelFrame(self.vila_frame, text="VILA Controls", padding=10)
+        controls_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # VILA analysis enable/disable switch
+        self.vila_analysis_var = tk.BooleanVar(value=True)
+        vila_switch = ttk.Checkbutton(controls_frame, text="🔍 Enable VILA Analysis", 
+                                     variable=self.vila_analysis_var,
+                                     command=self._on_vila_analysis_toggle)
+        vila_switch.pack(side=tk.LEFT, padx=5)
+        
+        # Status indicator
+        self.vila_status_label = ttk.Label(controls_frame, text="🟢 VILA Active", foreground="green")
+        self.vila_status_label.pack(side=tk.LEFT, padx=10)
+        
         # Analysis request frame
         request_frame = ttk.LabelFrame(self.vila_frame, text="Request Analysis", padding=10)
         request_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -688,33 +801,40 @@ class RobotGUIROS2:
         # Update connection status
         self.connection_label.config(text="ROS2 Connected", foreground="green")
         
-        # Update robot status in system status panel
-        if 'status' in data and 'robot_status' in self.sensor_labels:
+        # Update robot status in system status panel with more detailed info
+        if 'robot_status' in self.sensor_labels:
             status_label, unit = self.sensor_labels['robot_status']
-            status_label.config(text=f"{data['status'].title()} {unit}")
+            
+            # Create detailed status string
+            if 'status' in data:
+                status_text = data['status'].title()
+                # Add connection indicator
+                status_text += " (Connected)"
+                status_label.config(text=status_text, foreground="green")
+            else:
+                status_label.config(text="Offline", foreground="red")
     
     def _update_sensor_data(self, data):
-        """Update sensor data display"""
+        """Update sensor data storage (display updates handled by _update_system_status)"""
         self.sensor_data = data
+    
+    def _update_imu_data(self, data):
+        """Update IMU data storage (display updates handled by _update_system_status)"""
+        # Store IMU data in sensor_data for system status display
+        if not hasattr(self, 'sensor_data'):
+            self.sensor_data = {}
         
-        # Add VILA model state to data
-        data['vila_model_state'] = self._get_vila_model_state()
-        
-        # Update sensor labels
-        for key, (label, unit) in self.sensor_labels.items():
+        # Merge IMU data into sensor_data
+        for key in ['imu_accel_x', 'imu_accel_y', 'imu_accel_z']:
             if key in data:
-                value = data[key]
-                if isinstance(value, (int, float)):
-                    label.config(text=f"{value:.2f} {unit}")
-                else:
-                    label.config(text=f"{value} {unit}")
+                self.sensor_data[key] = data[key]
     
     def _get_vila_model_state(self):
         """Get current VILA model state"""
         try:
             # Check if we have recent VILA analysis (within last 30 seconds)
-            if hasattr(self, 'last_vila_update') and self.last_vila_update:
-                time_diff = time.time() - self.last_vila_update
+            if hasattr(self.ros_node, 'last_vila_update') and self.ros_node.last_vila_update:
+                time_diff = time.time() - self.ros_node.last_vila_update
                 if time_diff < 30:
                     return "Active"
                 else:
@@ -724,21 +844,49 @@ class RobotGUIROS2:
         except Exception:
             return "Unknown"
     
+    def _determine_robot_status(self, sensor_data):
+        """Determine robot status based on sensor data, using battery voltage as primary indicator"""
+        try:
+            # Check if we have recent sensor data (within last 5 seconds)
+            current_time = time.time() * 1000000000  # Convert to nanoseconds
+            sensor_timestamp = sensor_data.get('timestamp', 0)
+            
+            if sensor_timestamp == 0:
+                return "Offline"
+            
+            time_diff = (current_time - sensor_timestamp) / 1000000000  # Convert back to seconds
+            
+            if time_diff > 10:  # No data for more than 10 seconds
+                return "Offline"
+            elif time_diff > 5:  # Stale data (5-10 seconds)
+                return "Stale"
+            else:
+                # Use battery voltage as primary indicator of robot status
+                battery_voltage = sensor_data.get('battery_voltage', 0)
+                
+                if battery_voltage <= 0:
+                    return "Offline"
+                elif 7.0 <= battery_voltage <= 13.0:
+                    # Robot is running - battery voltage is in operational range
+                    return "Running"
+                elif battery_voltage < 7.0:
+                    return "Low Battery"
+                elif battery_voltage > 13.0:
+                    return "High Voltage"
+                else:
+                    return "Unknown"
+        except Exception as e:
+            logger.error(f"Error determining robot status: {e}")
+            return "Unknown"
+    
     def _update_camera_image(self, pil_image):
         """Update camera image display"""
         try:
             self.current_image = pil_image
             
-            # Resize for display
-            display_size = (320, 240)
-            display_image = pil_image.resize(display_size, Image.Resampling.LANCZOS)
-            
-            # Convert to Tkinter format
-            photo = ImageTk.PhotoImage(display_image)
-            
-            # Update label
-            self.camera_label.config(image=photo, text="")
-            self.camera_label.image = photo  # Keep a reference
+            # Only display if camera source is set to robot
+            if self.camera_source == "robot":
+                self._update_camera_display(pil_image)
             
         except Exception as e:
             logger.error(f"Error updating camera image: {e}")
@@ -816,10 +964,89 @@ class RobotGUIROS2:
         self.log_text.insert(tk.END, log_entry)
         self.log_text.see(tk.END)
     
-    def cleanup(self):
-        """Cleanup ROS2 resources"""
+    def _on_vila_analysis_toggle(self):
+        """Handle VILA analysis enable/disable toggle"""
+        self.vila_analysis_enabled = self.vila_analysis_var.get()
+        status_text = "🟢 VILA Active" if self.vila_analysis_enabled else "🔴 VILA Disabled"
+        status_color = "green" if self.vila_analysis_enabled else "red"
+        self.vila_status_label.config(text=status_text, foreground=status_color)
+        
+        action = "enabled" if self.vila_analysis_enabled else "disabled"
+        self.log_message(f"🔍 VILA analysis {action}")
+        
+        # TODO: Send ROS2 message to vila_vision_node to enable/disable analysis
+    
+    def _on_camera_source_change(self):
+        """Handle camera source change"""
+        self.camera_source = self.camera_source_var.get()
+        self.log_message(f"📷 Camera source changed to: {self.camera_source}")
+        
+        # Update display based on source
+        if self.camera_source == "loaded" and self.loaded_image:
+            self._update_camera_display(self.loaded_image)
+        elif self.camera_source == "robot" and self.current_image:
+            self._update_camera_display(self.current_image)
+        elif self.camera_source == "sim":
+            # TODO: Load simulator image if available
+            self.log_message("📷 Simulator camera not yet implemented")
+    
+    def _load_image_file(self):
+        """Load an image file for analysis"""
         try:
-            logger.info("🔄 Shutting down Robot GUI...")
+            file_path = filedialog.askopenfilename(
+                title="Select Image File",
+                filetypes=[
+                    ("Image files", "*.png *.jpg *.jpeg *.gif *.bmp *.tiff"),
+                    ("All files", "*.*")
+                ]
+            )
+            
+            if file_path:
+                # Load and display the image
+                self.loaded_image = Image.open(file_path)
+                self.log_message(f"📁 Loaded image: {file_path}")
+                
+                # Switch to loaded image source and display
+                self.camera_source_var.set("loaded")
+                self.camera_source = "loaded"
+                self._update_camera_display(self.loaded_image)
+                
+        except Exception as e:
+            self.log_message(f"❌ Error loading image: {e}")
+            messagebox.showerror("Load Error", f"Failed to load image: {e}")
+    
+    def _update_camera_display(self, pil_image):
+        """Update the camera display with a PIL image"""
+        try:
+            # Resize image to fit display (max 400x300)
+            display_image = pil_image.copy()
+            display_image.thumbnail((400, 300), Image.Resampling.LANCZOS)
+            
+            # Convert to Tkinter PhotoImage
+            photo = ImageTk.PhotoImage(display_image)
+            
+            # Update label
+            self.camera_label.config(image=photo, text="")
+            self.camera_label.image = photo  # Keep a reference
+            
+        except Exception as e:
+            self.log_message(f"❌ Error updating camera display: {e}")
+    
+    def cleanup(self):
+        """Cleanup ROS2 resources and shutdown entire system"""
+        try:
+            logger.info("🔄 Shutting down Robot GUI and entire system...")
+            
+            # Send shutdown signal to other nodes via ROS2 topic
+            try:
+                shutdown_msg = Bool()
+                shutdown_msg.data = True
+                # Create a temporary publisher for shutdown signal
+                shutdown_pub = self.ros_node.create_publisher(Bool, '/system/shutdown_request', 10)
+                shutdown_pub.publish(shutdown_msg)
+                logger.info("📡 Sent shutdown signal to other nodes")
+            except Exception as e:
+                logger.warning(f"Could not send shutdown signal: {e}")
             
             # Stop ROS2 spinning if it's running
             if hasattr(self, 'ros_thread') and self.ros_thread.is_alive():
@@ -828,21 +1055,58 @@ class RobotGUIROS2:
             # Destroy ROS2 node
             if hasattr(self, 'ros_node') and self.ros_node:
                 logger.info("Destroying ROS2 node...")
-                self.ros_node.destroy_node()
+                try:
+                    self.ros_node.destroy_node()
+                except Exception as e:
+                    logger.warning(f"Error destroying node: {e}")
                 
             # Shutdown ROS2
             if rclpy.ok():
                 logger.info("Shutting down ROS2...")
-                rclpy.shutdown()
+                try:
+                    rclpy.shutdown()
+                except Exception as e:
+                    logger.warning(f"Error shutting down ROS2: {e}")
+            
+            # Try to kill the launch process that started us
+            try:
+                import os
+                import signal
+                # Find and kill the launch process
+                os.system("pkill -f 'client_system.launch.py' 2>/dev/null")
+                logger.info("🛑 Attempted to stop launch process")
+            except Exception as e:
+                logger.warning(f"Could not stop launch process: {e}")
                 
             logger.info("✅ Robot GUI shutdown complete")
             
         except Exception as e:
             logger.error(f"❌ Error during cleanup: {e}")
+            # Don't re-raise the exception to avoid hanging
 
 def main():
     """Main application entry point"""
+    import signal
+    import sys
+    
     root = tk.Tk()
+    app = None
+    
+    def signal_handler(signum, frame):
+        """Handle Ctrl-C (SIGINT) gracefully"""
+        logger.info("⚠️ Received interrupt signal (Ctrl-C)")
+        try:
+            if app:
+                app.cleanup()
+            root.quit()
+            root.destroy()
+        except Exception as e:
+            logger.error(f"Error during signal cleanup: {e}")
+        finally:
+            sys.exit(0)
+    
+    # Register signal handler for Ctrl-C
+    signal.signal(signal.SIGINT, signal_handler)
     
     try:
         app = RobotGUIROS2(root)
@@ -856,7 +1120,12 @@ def main():
                 root.destroy()  # Destroy window
             except Exception as e:
                 logger.error(f"Error during window close: {e}")
-                root.quit()
+                # Force quit even if cleanup fails
+                try:
+                    root.quit()
+                    root.destroy()
+                except:
+                    pass
         
         root.protocol("WM_DELETE_WINDOW", on_closing)
         
@@ -866,11 +1135,12 @@ def main():
         
     except KeyboardInterrupt:
         logger.info("⚠️ Application interrupted by user")
+        signal_handler(signal.SIGINT, None)
     except Exception as e:
         logger.error(f"❌ Application error: {e}")
     finally:
         try:
-            if 'app' in locals():
+            if app:
                 app.cleanup()
         except Exception as e:
             logger.error(f"❌ Final cleanup error: {e}")

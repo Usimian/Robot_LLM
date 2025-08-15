@@ -86,7 +86,7 @@ class VILARos2Node(Node):
         # Navigation commands (parsed from VILA)
         self.navigation_pub = self.create_publisher(
             String, 
-            '/vila/navigation_command', 
+            '/robot/navigation_commands', 
             self.reliable_qos
         )
         
@@ -135,7 +135,7 @@ class VILARos2Node(Node):
         # VILA analysis service
         self.analysis_service = self.create_service(
             RequestVILAAnalysis,
-            '/vila/analyze_image',
+            '/vila/request_analysis',
             self._analyze_image_service
         )
     
@@ -202,15 +202,20 @@ Keep it concise for real-time navigation."""
                 image=pil_image
             )
             
-            # Parse navigation commands
-            nav_commands = self._parse_navigation_commands(response)
+            # Extract the analysis text from the response dictionary
+            if isinstance(response, dict) and response.get('success', False):
+                analysis_text = response.get('analysis', 'No analysis available')
+            else:
+                analysis_text = str(response)
+            
+            # Parse navigation commands from the analysis text
+            nav_commands = self._parse_navigation_commands(analysis_text)
             
             # Create VILA analysis message
             analysis_msg = VILAAnalysis()
             analysis_msg.robot_id = self.robot_id
             analysis_msg.prompt = navigation_prompt
-            analysis_msg.image = image_msg
-            analysis_msg.analysis_result = response
+            analysis_msg.analysis_result = analysis_text
             analysis_msg.navigation_commands_json = json.dumps(nav_commands)
             analysis_msg.confidence = nav_commands.get('confidence', 0.0)
             analysis_msg.timestamp_ns = self.get_clock().now().nanoseconds
@@ -379,12 +384,18 @@ Keep it concise for real-time navigation."""
             pil_image = PILImage.fromarray(rgb_image)
             
             # Generate VILA response
-            analysis_result = self.vila_model.generate_response(
+            response = self.vila_model.generate_response(
                 prompt=request.prompt,
                 image=pil_image
             )
             
-            # Parse navigation commands
+            # Extract the analysis text from the response dictionary
+            if isinstance(response, dict) and response.get('success', False):
+                analysis_result = response.get('analysis', 'No analysis available')
+            else:
+                analysis_result = str(response)
+            
+            # Parse navigation commands from the analysis text
             nav_commands = self._parse_navigation_commands(analysis_result)
             
             # Fill response
