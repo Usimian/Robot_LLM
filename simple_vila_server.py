@@ -18,10 +18,22 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from PIL import Image as PILImage
 from pydantic import BaseModel
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoProcessor
 
-# Add VILA path
+# Add VILA path and import VILA properly
 sys.path.insert(0, 'VILA')
+
+# Try to import VILA modules
+try:
+    from llava.model.builder import load_pretrained_model
+    from llava.mm_utils import get_model_name_from_path
+    # Remove problematic import that's not needed
+    VILA_AVAILABLE = True
+    print("✅ VILA modules imported successfully")
+except ImportError as e:
+    print(f"⚠️ VILA modules not available: {e}")
+    print("📦 Falling back to transformers models")
+    from transformers import AutoTokenizer, AutoModelForCausalLM, AutoProcessor
+    VILA_AVAILABLE = False
 
 app = FastAPI(title="Simple VILA Server", version="1.0.0")
 
@@ -56,18 +68,63 @@ processor = None
 
 @app.on_event("startup")
 async def startup():
-    global model, tokenizer, processor
+    global model, tokenizer, processor, VILA_AVAILABLE
     
     try:
         print("🚀 Starting Simple VILA Server...")
         
-        # Try to load a basic vision-language model instead of complex VILA
-        model_name = "microsoft/git-base"  # Simple vision-language model
+        if VILA_AVAILABLE:
+            # Use official VILA installation with simpler approach
+            print("🎯 Using official VILA 2.0.0 installation")
+            
+            try:
+                # Try to load VILA1.5-3B (already downloaded from previous attempt)
+                model_path = "Efficient-Large-Model/VILA1.5-3B"
+                print(f"🔄 Loading VILA model: {model_path}")
+                
+                # Disable low_cpu_mem_usage and use basic loading
+                tokenizer, model, image_processor, context_len = load_pretrained_model(
+                    model_path=model_path,
+                    model_base=None,
+                    model_name=get_model_name_from_path(model_path),
+                    load_8bit=False,
+                    load_4bit=False,  # Disable quantization for now
+                    device_map=None   # Load to default device
+                )
+                
+                processor = image_processor  # VILA uses image_processor
+                print(f"✅ Successfully loaded VILA: {model_path}")
+                print(f"📊 Model context length: {context_len}")
+                model_loaded = True
+                
+            except Exception as e:
+                print(f"❌ Failed to load VILA: {e}")
+                print("⚠️ Falling back to transformers models")
+                VILA_AVAILABLE = False
+                model_loaded = False
         
-        print(f"📦 Loading model: {model_name}")
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        processor = AutoProcessor.from_pretrained(model_name)
-        model = AutoModelForCausalLM.from_pretrained(model_name)
+        if not VILA_AVAILABLE:
+            # Fallback to transformers models
+            print("📦 Using transformers fallback models")
+            from transformers import AutoTokenizer, AutoModelForCausalLM, AutoProcessor
+            
+            fallback_models = [
+                "microsoft/git-large",  # Better than git-base
+                "Salesforce/blip2-opt-2.7b",  # Good vision-language model
+                "microsoft/git-base"  # Final fallback
+            ]
+            
+            for model_name in fallback_models:
+                try:
+                    print(f"🔄 Loading fallback: {model_name}")
+                    tokenizer = AutoTokenizer.from_pretrained(model_name)
+                    processor = AutoProcessor.from_pretrained(model_name)
+                    model = AutoModelForCausalLM.from_pretrained(model_name)
+                    print(f"✅ Successfully loaded: {model_name}")
+                    break
+                except Exception as e:
+                    print(f"❌ Failed to load {model_name}: {e}")
+                    continue
         
         print("✅ Simple VILA Server ready!")
         

@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 import base64
 import io
+from typing import List
 from typing import Dict, List, Optional
 import logging
 import queue
@@ -49,6 +50,7 @@ class RobotGUIROS2Node(Node):
         self.last_vila_update = None  # Track VILA model activity
         self.latest_imu_data = None  # Store latest IMU data
         self.current_camera_image = None  # Store current camera image for VILA requests
+        self.current_sensor_data = None  # Store current sensor data including LiDAR distances
         
         # QoS profiles
         # QoS for image streams (FIXED: Match robot publisher QoS to prevent frame drops)
@@ -201,6 +203,9 @@ class RobotGUIROS2Node(Node):
                 'camera_status': msg.camera_status,
                 'timestamp': msg.timestamp_ns
             }
+            
+            # Store current sensor data for VILA analysis requests
+            self.current_sensor_data = sensor_data
             
             # Send to GUI
             self.gui_callback('sensor_data', sensor_data)
@@ -458,6 +463,19 @@ class RobotGUIROS2Node(Node):
             request = RequestVILAAnalysis.Request()
             request.robot_id = self.robot_id
             request.prompt = prompt
+            
+            # Include current LiDAR distances for enhanced navigation decisions
+            if hasattr(self, 'current_sensor_data') and self.current_sensor_data:
+                request.distance_front = self.current_sensor_data.get('distance_front', 2.0)  # Default 2m if no data
+                request.distance_left = self.current_sensor_data.get('distance_left', 2.0)
+                request.distance_right = self.current_sensor_data.get('distance_right', 2.0)
+                self.get_logger().info(f"🔍 Including LiDAR data: F={request.distance_front:.2f}m, L={request.distance_left:.2f}m, R={request.distance_right:.2f}m")
+            else:
+                # Default distances if no sensor data available
+                request.distance_front = 2.0
+                request.distance_left = 2.0  
+                request.distance_right = 2.0
+                self.get_logger().warn("⚠️ No sensor data available, using default distances for VILA analysis")
             request.image = image_to_send
             
             self.get_logger().info(f"🔍 Sending VILA analysis request with image: {image_to_send.width}x{image_to_send.height}")
@@ -573,6 +591,7 @@ class RobotGUIROS2:
         print("🔧 DEBUG: movement_enabled initialized")
         # VILA automatic analysis state
         self.vila_auto_analysis = False
+        self.exploration_enabled = True  # Enable autonomous exploration by default
         print("🔧 DEBUG: vila_auto_analysis initialized")
         self.vila_auto_interval = 5.0  # seconds
         print("🔧 DEBUG: vila_auto_interval initialized")
@@ -661,6 +680,78 @@ class RobotGUIROS2:
         # Schedule next update (50ms for responsive ROS message processing)
         self.root.after(50, self._process_updates)
     
+    def _get_lidar_safe_actions(self, front_dist: float, left_dist: float, right_dist: float) -> List[str]:
+        """
+        Dedicated LiDAR safety pipeline - determines safe actions based purely on spatial constraints
+        This is the 'late fusion' LiDAR processing separate from VILA's visual analysis
+        """
+        safe_actions = []
+        
+        # Define safety thresholds (conservative for collision avoidance)
+        FORWARD_SAFE_DISTANCE = 1.0   # Need 1.0m clearance for forward movement
+        TURN_SAFE_DISTANCE = 0.5      # Need 0.5m clearance for turns
+        EMERGENCY_DISTANCE = 0.3      # Below this, only stop is safe
+        
+        # Emergency stop condition
+        if front_dist < EMERGENCY_DISTANCE:
+            return ['stop']  # Only stop is safe
+        
+        # Forward movement safety
+        if front_dist >= FORWARD_SAFE_DISTANCE:
+            safe_actions.append('move_forward')
+        
+        # Turn safety
+        if left_dist >= TURN_SAFE_DISTANCE:
+            safe_actions.append('turn_left')
+            
+        if right_dist >= TURN_SAFE_DISTANCE:
+            safe_actions.append('turn_right')
+        
+        # Stop is always a safe option
+        safe_actions.append('stop')
+        
+        return safe_actions
+    
+    def _choose_exploration_action(self, safe_actions: List[str], front_dist: float, left_dist: float, right_dist: float) -> str:
+        """
+        Intelligent exploration algorithm - chooses the best action to explore the room
+        Prioritizes directions with more clearance for better exploration
+        """
+        # Remove 'stop' from safe actions for exploration (unless it's the only option)
+        exploration_actions = [action for action in safe_actions if action != 'stop']
+        
+        if not exploration_actions:
+            return 'stop'  # Only option
+        
+        # EXPLORATION STRATEGY: Choose direction with most clearance
+        if 'move_forward' in exploration_actions and front_dist > 1.5:
+            # Prefer forward if plenty of clearance
+            self.log_message(f"🎯 Exploration: Forward path clear ({front_dist:.1f}m)")
+            return 'move_forward'
+        
+        # If forward blocked, choose the side with more clearance
+        turn_options = []
+        if 'turn_left' in exploration_actions:
+            turn_options.append(('turn_left', left_dist))
+        if 'turn_right' in exploration_actions:
+            turn_options.append(('turn_right', right_dist))
+        
+        if turn_options:
+            # Sort by clearance distance (highest first)
+            turn_options.sort(key=lambda x: x[1], reverse=True)
+            best_turn, best_clearance = turn_options[0]
+            
+            self.log_message(f"🎯 Exploration: Best turn is {best_turn} with {best_clearance:.1f}m clearance")
+            return best_turn
+        
+        # If no turns available, try forward with caution
+        if 'move_forward' in exploration_actions:
+            self.log_message(f"🎯 Exploration: Cautious forward ({front_dist:.1f}m clearance)")
+            return 'move_forward'
+        
+        # Last resort
+        return 'stop'
+    
     def _update_system_status(self):
         """Update system status display (runs every 1 second)"""
         try:
@@ -686,9 +777,44 @@ class RobotGUIROS2:
                     cpu_usage = self.sensor_data['cpu_usage']
                     self.cpu_label.config(text=f"CPU: {cpu_usage:.1f}%")
                 
-                # Update ROS2 status
-                if hasattr(self, 'ros_status_label'):
-                    self.ros_status_label.config(text="🟢 ROS2 Active", foreground="green")
+                # Update LiDAR distances display with individual color coding
+                if hasattr(self, 'lidar_front_label'):
+                    front_dist = self.sensor_data.get('distance_front', 0.0)
+                    left_dist = self.sensor_data.get('distance_left', 0.0)
+                    right_dist = self.sensor_data.get('distance_right', 0.0)
+                    
+                    def get_distance_color(distance):
+                        """Get color based on distance value"""
+                        if distance < 0.3:
+                            return "red"      # Danger - very close obstacles
+                        elif distance < 0.6:
+                            return "orange"   # Caution - moderate distance
+                        elif distance < 1.0:
+                            return "blue"     # Normal - safe distance
+                        else:
+                            return "green"    # Clear - plenty of space
+                    
+                    # Update each distance with individual color coding
+                    self.lidar_front_label.config(
+                        text=f"F:{front_dist:.1f}m", 
+                        foreground=get_distance_color(front_dist)
+                    )
+                    self.lidar_left_label.config(
+                        text=f"L:{left_dist:.1f}m", 
+                        foreground=get_distance_color(left_dist)
+                    )
+                    self.lidar_right_label.config(
+                        text=f"R:{right_dist:.1f}m", 
+                        foreground=get_distance_color(right_dist)
+                    )
+                
+                # Update Robot status based on battery voltage
+                if hasattr(self, 'ros_status_label') and 'battery_voltage' in self.sensor_data:
+                    battery_voltage = self.sensor_data['battery_voltage']
+                    if battery_voltage > 8.0:
+                        self.ros_status_label.config(text="🟢 Robot: Online", foreground="green")
+                    else:
+                        self.ros_status_label.config(text="🔴 Robot: Offline", foreground="red")
                 
                 # Update VILA status
                 if hasattr(self, 'vila_status_label'):
@@ -697,8 +823,34 @@ class RobotGUIROS2:
                         self.vila_status_label.config(text="🟢 VILA Active", foreground="green")
                     elif vila_state == "Ready":
                         self.vila_status_label.config(text="🔄 VILA Ready", foreground="blue")
+                    elif vila_state == "Starting":
+                        self.vila_status_label.config(text="🟡 VILA Starting", foreground="orange")
+                    elif vila_state == "Error":
+                        self.vila_status_label.config(text="❌ VILA Error", foreground="red")
+                    elif vila_state == "Offline":
+                        self.vila_status_label.config(text="⚫ VILA Offline", foreground="gray")
+                    elif vila_state == "Stopped":
+                        self.vila_status_label.config(text="🔴 VILA Stopped", foreground="red")
                     else:
-                        self.vila_status_label.config(text="🔴 VILA Idle", foreground="gray")
+                        self.vila_status_label.config(text="❓ VILA Unknown", foreground="gray")
+                
+                # Update VILA Analysis tab status indicator as well
+                if hasattr(self, 'vila_status_indicator'):
+                    vila_state = self._get_vila_model_state()
+                    if vila_state == "Active":
+                        self.vila_status_indicator.config(text="🟢 Active", foreground="green")
+                    elif vila_state == "Ready":
+                        self.vila_status_indicator.config(text="🔄 Ready", foreground="blue")
+                    elif vila_state == "Starting":
+                        self.vila_status_indicator.config(text="🟡 Starting", foreground="orange")
+                    elif vila_state == "Error":
+                        self.vila_status_indicator.config(text="❌ Error", foreground="red")
+                    elif vila_state == "Offline":
+                        self.vila_status_indicator.config(text="⚫ Offline", foreground="gray")
+                    elif vila_state == "Stopped":
+                        self.vila_status_indicator.config(text="🔴 Stopped", foreground="red")
+                    else:
+                        self.vila_status_indicator.config(text="❓ Unknown", foreground="gray")
                         
         except Exception as e:
             logger.error(f"Error updating system status: {e}")
@@ -838,7 +990,7 @@ class RobotGUIROS2:
         
         # Connection status
         ttk.Label(info_frame, text="Connection:").grid(row=0, column=2, sticky=tk.W, padx=(20, 0))
-        self.connection_label = ttk.Label(info_frame, text="ROS2 Active", foreground="green")
+        self.connection_label = ttk.Label(info_frame, text="Robot: Checking...", foreground="orange")
         self.connection_label.grid(row=0, column=3, sticky=tk.W, padx=10)
         
         # Movement controls frame
@@ -933,7 +1085,7 @@ class RobotGUIROS2:
         top_row.pack(fill=tk.X, pady=2)
         
         # VILA resource status
-        self.vila_status_label = ttk.Label(top_row, text="🔄 VILA Resource Ready", foreground="blue")
+        self.vila_status_label = ttk.Label(top_row, text="⚫ VILA Checking...", foreground="gray")
         self.vila_status_label.pack(side=tk.LEFT, padx=10)
         
         # Automatic analysis toggle button (avoiding BooleanVar due to segfault issues)
@@ -1113,8 +1265,12 @@ class RobotGUIROS2:
         """Update robot status display"""
         self.robot_data = data
         
-        # Update connection status
-        self.connection_label.config(text="ROS2 Connected", foreground="green")
+        # Update connection status based on battery voltage
+        battery_voltage = data.get('battery_voltage', 0)
+        if battery_voltage > 8.0:
+            self.connection_label.config(text="Robot: Online", foreground="green")
+        else:
+            self.connection_label.config(text="Robot: Offline", foreground="red")
         
         # Update robot status in system status panel with more detailed info
         if 'robot_status' in self.sensor_labels:
@@ -1147,13 +1303,24 @@ class RobotGUIROS2:
     def _get_vila_model_state(self):
         """Get current VILA model state"""
         try:
-            # Check if we have recent VILA analysis (within last 30 seconds)
+            # First check if VILA server is actually running
+            vila_server_status = self._get_vila_server_status_from_gui()
+            if not vila_server_status.get('process_running', False):
+                return "Offline"
+            elif vila_server_status.get('status') == 'error':
+                return "Error"
+            elif vila_server_status.get('status') == 'starting':
+                return "Starting"
+            elif vila_server_status.get('status') != 'running':
+                return "Stopped"
+            
+            # Server is running, now check if we have recent VILA analysis (within last 30 seconds)
             if hasattr(self.ros_node, 'last_vila_update') and self.ros_node.last_vila_update:
                 time_diff = time.time() - self.ros_node.last_vila_update
                 if time_diff < 30:
                     return "Active"
                 else:
-                    return "Idle"
+                    return "Ready"
             else:
                 return "Ready"
         except Exception:
@@ -1288,8 +1455,7 @@ class RobotGUIROS2:
     
     def _handle_vila_analysis_response(self, data):
         """Handle VILA analysis response"""
-        # Reset status to ready
-        self.vila_status_label.config(text="🔄 VILA Resource Ready", foreground="blue")
+        # Status will be updated by the system status update cycle
         
         timestamp = datetime.fromtimestamp(data['timestamp'] / 1e9).strftime("%H:%M:%S")
         analysis_text = f"[{timestamp}] VILA Analysis Complete:\n"
@@ -1310,16 +1476,58 @@ class RobotGUIROS2:
                 confidence > 0.5 and self.safety_enabled and self.movement_enabled):
                 
                 try:
-                    # Map VILA actions to robot commands
-                    if action == 'move':
+                    # LATE FUSION: Combine VILA's visual analysis with LiDAR safety constraints
+                    current_sensor_data = getattr(self.ros_node, 'current_sensor_data', None)
+                    if current_sensor_data:
+                        # Handle both dict and object formats
+                        if isinstance(current_sensor_data, dict):
+                            front_dist = current_sensor_data.get('distance_front', 0.0)
+                            # SWAP LEFT/RIGHT to fix reversal issue
+                            left_dist = current_sensor_data.get('distance_right', 0.0)   # Use right data for left
+                            right_dist = current_sensor_data.get('distance_left', 0.0)   # Use left data for right
+                        else:
+                            front_dist = getattr(current_sensor_data, 'distance_front', 0.0)
+                            # SWAP LEFT/RIGHT to fix reversal issue
+                            left_dist = getattr(current_sensor_data, 'distance_right', 0.0)   # Use right data for left
+                            right_dist = getattr(current_sensor_data, 'distance_left', 0.0)   # Use left data for right
+                        
+                        self.log_message(f"📊 Late Fusion - VILA: {action} | LiDAR: F:{front_dist:.2f}m L:{left_dist:.2f}m R:{right_dist:.2f}m")
+                        self.log_message(f"🔍 DEBUG: Raw sensor data - L:{current_sensor_data.get('distance_left', 'N/A')} R:{current_sensor_data.get('distance_right', 'N/A')}")
+                        
+                        # DEDICATED LIDAR SAFETY PIPELINE
+                        lidar_safe_actions = self._get_lidar_safe_actions(front_dist, left_dist, right_dist)
+                        
+                        if action not in lidar_safe_actions:
+                            # VILA's visual decision conflicts with LiDAR safety
+                            self.log_message(f"🚨 LATE FUSION OVERRIDE: VILA suggested '{action}' but LiDAR constraints allow only: {lidar_safe_actions}")
+                            
+                            # INTELLIGENT EXPLORATION: Choose best exploration action (if enabled)
+                            if hasattr(self, 'exploration_enabled') and getattr(self, 'exploration_enabled', True):
+                                exploration_action = self._choose_exploration_action(lidar_safe_actions, front_dist, left_dist, right_dist)
+                                if exploration_action:
+                                    action = exploration_action
+                                    self.log_message(f"🧭 Exploration override: {action}")
+                                else:
+                                    self.log_message(f"🚨 NO SAFE ACTIONS - Emergency stop")
+                                    return  # Complete block
+                            else:
+                                # Exploration disabled - just stop safely
+                                action = 'stop'
+                                self.log_message(f"🛑 Exploration disabled - stopping safely")
+                        else:
+                            self.log_message(f"✅ Late Fusion: VILA and LiDAR agree on '{action}'")
+                    
+                    # Map VILA actions to robot commands (only if safety checks passed)
+                    if action == 'move_forward' or action == 'move':
                         self.log_message(f"🤖 Auto-executing: move_forward (VILA confidence: {confidence:.2f})")
-                        self.ros_node.send_robot_command('move_forward', parameters={})
-                    elif action == 'turn' and 'left' in nav_cmd.get('reason', '').lower():
+                        # Use shorter, safer movement parameters
+                        self.ros_node.send_robot_command('move_forward', parameters={'distance': 0.1, 'speed': 0.05})
+                    elif action == 'turn_left' or (action == 'turn' and 'left' in nav_cmd.get('reason', '').lower()):
                         self.log_message(f"🤖 Auto-executing: turn_left (VILA confidence: {confidence:.2f})")
-                        self.ros_node.send_robot_command('turn_left', parameters={})
-                    elif action == 'turn' and 'right' in nav_cmd.get('reason', '').lower():
+                        self.ros_node.send_robot_command('turn_left', parameters={'angle': 45.0})  # Smaller turn
+                    elif action == 'turn_right' or (action == 'turn' and 'right' in nav_cmd.get('reason', '').lower()):
                         self.log_message(f"🤖 Auto-executing: turn_right (VILA confidence: {confidence:.2f})")
-                        self.ros_node.send_robot_command('turn_right', parameters={})
+                        self.ros_node.send_robot_command('turn_right', parameters={'angle': 45.0})  # Smaller turn
                     elif action == 'stop':
                         self.log_message(f"🤖 Auto-executing: stop (VILA confidence: {confidence:.2f})")
                         self.ros_node.send_robot_command('stop', parameters={})
@@ -1348,8 +1556,7 @@ class RobotGUIROS2:
     
     def _handle_vila_analysis_error(self, data):
         """Handle VILA analysis error"""
-        # Reset status to ready
-        self.vila_status_label.config(text="❌ VILA Error", foreground="red")
+        # Status will be updated by the system status update cycle
         
         error_text = f"❌ VILA Analysis Error: {data['error']}\n"
         error_text += "-" * 50 + "\n"
@@ -1663,15 +1870,29 @@ Keep it concise for real-time navigation.""",
             status_frame = ttk.Frame(info_frame)
             status_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=20)
             
-            self.ros_status_label = ttk.Label(status_frame, text="🟢 ROS2 Active", foreground="green")
+            self.ros_status_label = ttk.Label(status_frame, text="🟡 Robot: Checking...", foreground="orange")
             self.ros_status_label.pack(anchor=tk.W)
             
-            self.vila_status_label = ttk.Label(status_frame, text="🔄 VILA Ready", foreground="blue")
+            self.vila_status_label = ttk.Label(status_frame, text="⚫ VILA Checking...", foreground="gray")
             self.vila_status_label.pack(anchor=tk.W)
             
             # System metrics (right side)
             metrics_frame = ttk.Frame(info_frame)
             metrics_frame.pack(side=tk.RIGHT, fill=tk.X, expand=True)
+            
+            # LiDAR distances (positioned to the left of battery) - separate labels for individual coloring
+            lidar_frame = ttk.Frame(metrics_frame)
+            lidar_frame.pack(anchor=tk.E)
+            
+            ttk.Label(lidar_frame, text="LiDAR: ").pack(side=tk.LEFT)
+            self.lidar_front_label = ttk.Label(lidar_frame, text="F:--m", foreground="blue")
+            self.lidar_front_label.pack(side=tk.LEFT)
+            ttk.Label(lidar_frame, text=" ").pack(side=tk.LEFT)  # Spacer
+            self.lidar_left_label = ttk.Label(lidar_frame, text="L:--m", foreground="blue")
+            self.lidar_left_label.pack(side=tk.LEFT)
+            ttk.Label(lidar_frame, text=" ").pack(side=tk.LEFT)  # Spacer
+            self.lidar_right_label = ttk.Label(lidar_frame, text="R:--m", foreground="blue")
+            self.lidar_right_label.pack(side=tk.LEFT)
             
             self.battery_label = ttk.Label(metrics_frame, text="Battery: ---V")
             self.battery_label.pack(anchor=tk.E)
@@ -1771,7 +1992,7 @@ Keep it concise for real-time navigation.""",
         """Create VILA analysis section"""
         try:
             # Status indicator
-            self.vila_status_indicator = ttk.Label(parent, text="🔄 Ready", foreground="blue")
+            self.vila_status_indicator = ttk.Label(parent, text="⚫ VILA Checking...", foreground="gray")
             self.vila_status_indicator.pack(pady=5)
             
             # Auto analysis toggle

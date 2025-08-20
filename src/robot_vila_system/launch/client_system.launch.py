@@ -6,9 +6,11 @@ Launches VILA-related nodes that must run on the client PC where VILA model is a
 
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument, LogInfo
-from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, LogInfo, ExecuteProcess
+from launch.substitutions import LaunchConfiguration, FindExecutable, PathJoinSubstitution
 from launch.conditions import IfCondition
+from launch_ros.substitutions import FindPackageShare
+import os
 
 def generate_launch_description():
     """Generate launch description for client system - VILA nodes only"""
@@ -32,10 +34,33 @@ def generate_launch_description():
         description='Enable GUI interface'
     )
     
+    vila_server_enabled_arg = DeclareLaunchArgument(
+        'vila_server',
+        default_value='true',
+        description='Enable VILA server auto-start'
+    )
+    
     # Get launch configurations
     robot_id = LaunchConfiguration('robot_id')
     vila_enabled = LaunchConfiguration('vila')
     gui_enabled = LaunchConfiguration('gui')
+    vila_server_enabled = LaunchConfiguration('vila_server')
+    
+    # Get workspace root path for VILA server script
+    # Use absolute path to the workspace root where simple_vila_server.py is located
+    vila_server_script = "/home/marc/Robot_LLM/simple_vila_server.py"
+    
+    # VILA Server Process (HTTP server for VILA model)
+    vila_server_process = ExecuteProcess(
+        cmd=[
+            FindExecutable(name='python3'),
+            vila_server_script,
+            '--port', '8000'
+        ],
+        name='vila_server_process',
+        output='screen',
+        condition=IfCondition(vila_server_enabled)
+    )
     
     # VILA Server Node (runs on client - has direct access to VILA model)
     vila_server_node = Node(
@@ -69,13 +94,17 @@ def generate_launch_description():
         robot_id_arg,
         vila_enabled_arg,
         gui_enabled_arg,
+        vila_server_enabled_arg,
         
         LogInfo(msg='🚀 Starting Client System...'),
         LogInfo(msg=['Target Robot ID: ', robot_id]),
         LogInfo(msg=['VILA Enabled: ', vila_enabled]),
         LogInfo(msg=['GUI Enabled: ', gui_enabled]),
-        LogInfo(msg='📝 Complete client system with GUI and VILA processing'),
+        LogInfo(msg=['VILA Server Enabled: ', vila_server_enabled]),
+        LogInfo(msg=['VILA Server Script: ', vila_server_script]),
+        LogInfo(msg='📝 Complete client system with GUI, VILA processing, and auto VILA server'),
         
+        vila_server_process,
         vila_server_node,
         robot_gui_node,
     ])

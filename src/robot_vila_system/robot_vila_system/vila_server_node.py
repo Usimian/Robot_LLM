@@ -70,7 +70,7 @@ class RobotVILAServerROS2(Node):
         # Load configuration
         self.config = self._load_config()
         
-        # Initialize VILA model (HTTP client only - server started manually)
+        # Initialize VILA model (HTTP client only - server started by launch file)
         self.vila_model = VILAModel(auto_start_server=False)
         self.model_loaded = False
         
@@ -119,7 +119,7 @@ class RobotVILAServerROS2(Node):
         self._setup_subscribers()
         self._setup_services()
         
-        # Load VILA model
+        # Load VILA model (with delay to allow server startup)
         self._load_vila_model_async()
         
         # Start command processing thread
@@ -252,15 +252,27 @@ class RobotVILAServerROS2(Node):
         )
     
     def _load_vila_model_async(self):
-        """Load VILA model in background thread"""
+        """Load VILA model in background thread with startup delay"""
         def load_model():
+            # Wait for VILA server to start up (launched by launch file)
+            self.get_logger().info("⏳ Waiting for VILA server to start...")
+            time.sleep(10)  # Give VILA server more time to start and load model
+            
             self.get_logger().info("🚀 Loading VILA model...")
-            success = self.vila_model.load_model()
-            if success:
-                self.model_loaded = True
-                self.get_logger().info("✅ VILA model loaded successfully")
-            else:
-                self.get_logger().error("❌ Failed to load VILA model")
+            
+            # Try multiple times with increasing delays
+            for attempt in range(3):
+                success = self.vila_model.load_model()
+                if success:
+                    self.model_loaded = True
+                    self.get_logger().info("✅ VILA model loaded successfully")
+                    return
+                else:
+                    self.get_logger().warn(f"⚠️ VILA model load attempt {attempt + 1}/3 failed")
+                    if attempt < 2:  # Don't sleep on the last attempt
+                        time.sleep(5)  # Wait 5 seconds before retry
+            
+            self.get_logger().error("❌ Failed to load VILA model after 3 attempts - will retry on first request")
         
         threading.Thread(target=load_model, daemon=True).start()
     
@@ -316,20 +328,37 @@ class RobotVILAServerROS2(Node):
     # Image callback removed - VILA server is now purely on-demand
     # Images are provided by the client in analysis requests
     
-    def _process_image_with_vila_sync(self, image_msg: Image, prompt: str) -> str:
-        """Process image with VILA model synchronously for on-demand requests"""
+    def _process_image_with_vila_sync(self, image_msg: Image, prompt: str, lidar_data: Dict[str, float] = None) -> str:
+        """Process image with VILA model synchronously for on-demand requests with LiDAR integration"""
         try:
             from cv_bridge import CvBridge
             from PIL import Image as PILImage
             import cv2
             
+            # Create pure visual analysis prompt (LiDAR handled separately for late fusion)
             if not prompt:
-                prompt = """You are a robot's vision system. Analyze this camera view and provide:
-1. Can I move forward safely?
-2. Are there obstacles ahead?
-3. What should I do next (move_forward, turn_left, turn_right, stop)?
-4. Describe what you see briefly.
-Keep it concise for real-time navigation."""
+                prompt = """You are a robot's vision-language navigation system. Focus ONLY on visual analysis of the camera image:
+
+🔍 VISUAL ANALYSIS TASK:
+1. What do you see in this camera view?
+2. Are there visible obstacles, walls, or objects in the path ahead?
+3. What does the visual scene suggest about safe navigation directions?
+4. Based on VISUAL INFORMATION ONLY, what navigation action would you recommend?
+
+🎯 OUTPUT FORMAT:
+Action: [move_forward/turn_left/turn_right/stop]
+Reason: [Brief explanation based purely on visual analysis]
+
+Focus on visual semantics - spatial safety will be handled by separate LiDAR systems."""
+            else:
+                # User provided custom prompt - keep it pure visual, no LiDAR integration
+                prompt = f"""🔍 VISUAL ANALYSIS: {prompt}
+
+Focus on visual analysis only. Provide:
+Action: [move_forward/turn_left/turn_right/stop]
+Reason: [Brief visual-based explanation]
+
+Spatial safety constraints will be handled separately."""
             
             # Check if image has valid data and encoding
             if not image_msg.data:
@@ -366,28 +395,105 @@ Keep it concise for real-time navigation."""
             self.get_logger().error(f"❌ Error processing image with VILA: {e}")
             return f"Error during analysis: {str(e)}"
     
-    def _parse_navigation_commands(self, response: str) -> Dict[str, Any]:
-        """Parse VILA response for navigation commands"""
+    def _parse_navigation_commands(self, response: str, lidar_data: Dict[str, float] = None) -> Dict[str, Any]:
+        """Parse VILA response for navigation commands with LiDAR-enhanced safety"""
         response_lower = response.lower()
         
         commands = {
             'action': 'stop',  # default safe action
             'confidence': 0.0,
-            'reason': response
+            'reason': response,
+            'lidar_safety': 'unknown'
         }
         
-        if 'move forward' in response_lower or ('clear' in response_lower and 'safe' in response_lower):
-            commands['action'] = 'move'
-            commands['confidence'] = 0.8
-        elif 'turn left' in response_lower:
-            commands['action'] = 'turn'
-            commands['confidence'] = 0.7
-        elif 'turn right' in response_lower:
-            commands['action'] = 'turn'
-            commands['confidence'] = 0.7
-        elif 'stop' in response_lower or 'obstacle' in response_lower:
-            commands['action'] = 'stop'
-            commands['confidence'] = 0.9
+        # Emergency LiDAR safety override (only for critical situations where VILA might have missed something)
+        if lidar_data:
+            front_dist = lidar_data['distance_front']
+            left_dist = lidar_data['distance_left'] 
+            right_dist = lidar_data['distance_right']
+            
+            # SAFETY OVERRIDE: Override if front obstacle too close for forward movement
+            if front_dist < 0.5:  # 50cm safety threshold for forward movement
+                # Check if VILA suggested forward movement despite close obstacle
+                if 'move_forward' in response_lower or ('Action:' in response and 'move_forward' in response.lower()):
+                    self.get_logger().warn(f"🚨 SAFETY OVERRIDE TRIGGERED: Front obstacle at {front_dist:.2f}m, VILA suggested forward movement")
+                    commands.update({
+                        'action': 'stop',
+                        'confidence': 0.95,
+                        'reason': f"SAFETY OVERRIDE: Front obstacle at {front_dist:.2f}m too close for forward movement. VILA suggested forward but overridden for safety. Original: " + response[:100] + "...",
+                        'lidar_safety': 'safety_override'
+                    })
+                    return commands
+            
+            # EMERGENCY ONLY: Override if front obstacle extremely close
+            if front_dist < 0.3:  # 30cm emergency threshold 
+                commands.update({
+                    'action': 'stop',
+                    'confidence': 0.98,
+                    'reason': f"EMERGENCY OVERRIDE: Front obstacle at {front_dist:.2f}m < 0.3m. VILA response was: " + response[:100] + "...",
+                    'lidar_safety': 'emergency_stop'
+                })
+                return commands
+            
+            # Store LiDAR context for logging
+            commands['lidar_safety'] = f'F:{front_dist:.1f}m_L:{left_dist:.1f}m_R:{right_dist:.1f}m'
+            
+            # Parse VILA response - VILA now has LiDAR data and should make informed decisions
+            # Look for the structured output format we requested
+            if 'Action:' in response:
+                # Parse structured response
+                action_line = [line.strip() for line in response.split('\n') if line.strip().startswith('Action:')]
+                if action_line:
+                    action_text = action_line[0].replace('Action:', '').strip().lower()
+                    if 'move_forward' in action_text:
+                        commands.update({'action': 'move_forward', 'confidence': 0.9})
+                    elif 'turn_left' in action_text:
+                        commands.update({'action': 'turn_left', 'confidence': 0.9})
+                    elif 'turn_right' in action_text:
+                        commands.update({'action': 'turn_right', 'confidence': 0.9})
+                    elif 'stop' in action_text:
+                        commands.update({'action': 'stop', 'confidence': 0.9})
+            else:
+                # Fallback to keyword parsing if structured format not used
+                if 'move forward' in response_lower or 'move_forward' in response_lower:
+                    commands.update({'action': 'move_forward', 'confidence': 0.8})
+                elif 'turn left' in response_lower or 'turn_left' in response_lower:
+                    commands.update({'action': 'turn_left', 'confidence': 0.8})
+                elif 'turn right' in response_lower or 'turn_right' in response_lower:
+                    commands.update({'action': 'turn_right', 'confidence': 0.8})
+                elif 'stop' in response_lower:
+                    commands.update({'action': 'stop', 'confidence': 0.9})
+                else:
+                    # VILA response unclear - default to stop for safety
+                    commands.update({
+                        'action': 'stop',
+                        'confidence': 0.6,
+                        'reason': f"UNCLEAR VILA RESPONSE: Defaulting to stop for safety. " + response
+                    })
+            
+            # Update reason with LiDAR context
+            commands['reason'] = f"VILA+LiDAR Decision (F:{front_dist:.2f}m, L:{left_dist:.2f}m, R:{right_dist:.2f}m): " + response
+            
+            # FINAL SAFETY CHECK: Override dangerous decisions after parsing
+            if front_dist < 0.5 and commands['action'] == 'move_forward':
+                self.get_logger().warn(f"🚨 FINAL SAFETY OVERRIDE: Blocking move_forward with front obstacle at {front_dist:.2f}m")
+                commands.update({
+                    'action': 'stop',
+                    'confidence': 0.98,
+                    'reason': f"FINAL SAFETY OVERRIDE: Front obstacle at {front_dist:.2f}m too close for forward movement. VILA+parsing suggested forward but overridden. Original decision: {commands['reason']}",
+                    'lidar_safety': 'final_safety_override'
+                })
+                    
+        else:
+            # Fallback to original parsing when no LiDAR data
+            if 'move forward' in response_lower or ('clear' in response_lower and 'safe' in response_lower):
+                commands.update({'action': 'move_forward', 'confidence': 0.8})
+            elif 'turn left' in response_lower:
+                commands.update({'action': 'turn_left', 'confidence': 0.7})
+            elif 'turn right' in response_lower:
+                commands.update({'action': 'turn_right', 'confidence': 0.7})
+            elif 'stop' in response_lower or 'obstacle' in response_lower:
+                commands.update({'action': 'stop', 'confidence': 0.9})
             
         return commands
     
@@ -511,13 +617,21 @@ Keep it concise for real-time navigation."""
             self.get_logger().info(f"🔍 On-demand VILA analysis requested for {request.robot_id}")
             self.get_logger().info(f"   └── Prompt: {request.prompt}")
             self.get_logger().info(f"   └── Image: {request.image.width}x{request.image.height}, encoding: {request.image.encoding}")
+            self.get_logger().info(f"   └── LiDAR: Front={request.distance_front:.2f}m, Left={request.distance_left:.2f}m, Right={request.distance_right:.2f}m")
             
             # Use the image provided by the client
             image_to_analyze = request.image
             
-            # Process with VILA using the client-provided image
-            analysis_result = self._process_image_with_vila_sync(image_to_analyze, request.prompt)
-            nav_commands = self._parse_navigation_commands(analysis_result)
+            # Extract LiDAR distances for enhanced analysis
+            lidar_data = {
+                'distance_front': request.distance_front,
+                'distance_left': request.distance_left,
+                'distance_right': request.distance_right
+            }
+            
+            # Process with VILA using the client-provided image and LiDAR data
+            analysis_result = self._process_image_with_vila_sync(image_to_analyze, request.prompt, lidar_data)
+            nav_commands = self._parse_navigation_commands(analysis_result, lidar_data)
             
             # Fill service response directly
             response.success = True
@@ -560,7 +674,7 @@ Keep it concise for real-time navigation."""
         return response
     
     def _validate_command_safety(self, command: RobotCommand) -> bool:
-        """Validate command against safety constraints"""
+        """Validate command against safety constraints including LiDAR distances"""
         self.get_logger().info(f"🔍 SAFETY CHECK: command={command.command_type}, safety_enabled={self.safety_enabled}, robot_status={self.robot_info.status}")
         
         # Check if safety is enabled
@@ -572,6 +686,31 @@ Keep it concise for real-time navigation."""
         if command.command_type == 'stop':
             self.get_logger().info(f"✅ SAFETY: Allowing stop command (always safe)")
             return True
+        
+        # LiDAR-based safety validation for movement commands
+        if self.robot_info.sensor_data:
+            front_dist = self.robot_info.sensor_data.get('distance_front', float('inf'))
+            left_dist = self.robot_info.sensor_data.get('distance_left', float('inf'))
+            right_dist = self.robot_info.sensor_data.get('distance_right', float('inf'))
+            
+            # Critical safety check: Block forward movement if front obstacle too close
+            if command.command_type == 'move' and command.linear_x > 0:  # Forward movement
+                if front_dist < 0.25:  # 25cm critical safety threshold
+                    self.get_logger().warn(f"🚫 LIDAR SAFETY: Forward movement blocked - front obstacle at {front_dist:.2f}m < 0.25m")
+                    return False
+                elif front_dist < 0.4:  # 40cm warning threshold
+                    self.get_logger().warn(f"⚠️ LIDAR WARNING: Forward movement with caution - front obstacle at {front_dist:.2f}m")
+            
+            # Check turn safety
+            elif command.command_type == 'turn':
+                if command.angular > 0 and left_dist < 0.3:  # Left turn
+                    self.get_logger().warn(f"🚫 LIDAR SAFETY: Left turn blocked - obstacle at {left_dist:.2f}m < 0.3m")
+                    return False
+                elif command.angular < 0 and right_dist < 0.3:  # Right turn
+                    self.get_logger().warn(f"🚫 LIDAR SAFETY: Right turn blocked - obstacle at {right_dist:.2f}m < 0.3m")
+                    return False
+            
+            self.get_logger().info(f"✅ LIDAR SAFETY: Command {command.command_type} approved (F:{front_dist:.2f}m, L:{left_dist:.2f}m, R:{right_dist:.2f}m)")
         
         # For testing/simulation mode: if no robot is connected, allow commands when safety is enabled
         # This allows the GUI to work without a physical robot
