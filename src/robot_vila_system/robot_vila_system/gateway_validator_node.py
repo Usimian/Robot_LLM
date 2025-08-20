@@ -101,7 +101,7 @@ class CommandGatewayValidator(Node):
         """Monitor legitimate commands from gateway"""
         self.command_sources['gateway'] += 1
         
-        self.get_logger().info(f"✅ LEGITIMATE: Command {msg.command_type} from gateway (source: {msg.source})")
+        self.get_logger().info(f"✅ LEGITIMATE: Command {msg.command_type} from gateway (source: {msg.source_node})")
         
         # Validate command structure
         self._validate_command_structure(msg)
@@ -145,16 +145,11 @@ class CommandGatewayValidator(Node):
         if not msg.command_type:
             issues.append("Missing command_type")
         
-        if not msg.source:
-            issues.append("Missing source field")
+        if not msg.source_node:
+            issues.append("Missing source_node field")
         
         if msg.timestamp_ns == 0:
             issues.append("Missing timestamp")
-        
-        # Check safety fields
-        if msg.command_type in ['move', 'turn', 'forward', 'backward']:
-            if not msg.safety_confirmed and not msg.gui_movement_enabled:
-                issues.append("Movement command without safety confirmation")
         
         # Report issues
         if issues:

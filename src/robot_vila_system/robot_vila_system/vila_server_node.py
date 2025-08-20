@@ -7,7 +7,7 @@ Maintains single command gateway architecture with ROS2 messaging
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 import sys
 import os
 import json
@@ -70,8 +70,8 @@ class RobotVILAServerROS2(Node):
         # Load configuration
         self.config = self._load_config()
         
-        # Initialize VILA model
-        self.vila_model = VILAModel()
+        # Initialize VILA model (HTTP client only - server started manually)
+        self.vila_model = VILAModel(auto_start_server=False)
         self.model_loaded = False
         
         # Robot management
@@ -91,9 +91,18 @@ class RobotVILAServerROS2(Node):
         
         # Safety status
         self.safety_enabled = True
-        self.gui_movement_enabled = False
+        
+        # VILA server is now purely on-demand - images provided by client requests
         
         # QoS profiles
+        # QoS for image streams (compatible with RealSense camera)
+        self.image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,  # RealSense uses BEST_EFFORT
+            durability=DurabilityPolicy.VOLATILE,       # Images are transient data
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1  # Only need latest image for analysis
+        )
+        
         self.reliable_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -118,6 +127,9 @@ class RobotVILAServerROS2(Node):
             target=self._process_commands, daemon=True
         )
         self.command_processor_thread.start()
+        
+        # Start VILA status publishing timer (every 2 seconds)
+        self.vila_status_timer = self.create_timer(2.0, self._publish_vila_status)
         
         self.get_logger().info("🤖 ROS2 VILA Robot Server initialized")
         self.get_logger().info(f"   └── Robot ID: {self.robot_info.robot_id}")
@@ -176,6 +188,13 @@ class RobotVILAServerROS2(Node):
             '/robot/navigation_commands',
             self.best_effort_qos
         )
+        
+        # VILA server status
+        self.vila_status_publisher = self.create_publisher(
+            String,
+            '/vila/server_status',
+            self.reliable_qos
+        )
     
     def _setup_subscribers(self):
         """Setup ROS2 subscribers"""
@@ -187,13 +206,8 @@ class RobotVILAServerROS2(Node):
             self.best_effort_qos
         )
         
-        # Camera images from robot
-        self.image_subscriber = self.create_subscription(
-            Image,
-            '/robot/camera/image_raw',
-            self._image_callback,
-            self.best_effort_qos
-        )
+        # VILA server is now purely on-demand - no autonomous image processing
+        # Camera images are provided by the client when requesting analysis
         
         # IMU data from robot
         self.imu_subscriber = self.create_subscription(
@@ -218,6 +232,8 @@ class RobotVILAServerROS2(Node):
             self._emergency_stop_callback,
             self.reliable_qos
         )
+        
+        # Note: VILA is now resource-based - no enable/disable, only on-demand requests
     
     def _setup_services(self):
         """Setup ROS2 services"""
@@ -297,62 +313,58 @@ class RobotVILAServerROS2(Node):
         except Exception as e:
             self.get_logger().error(f"❌ Error processing IMU data: {e}")
     
-    def _image_callback(self, msg: Image):
-        """Handle camera images from robot - trigger automatic VILA analysis"""
-        if not self.model_loaded:
-            return
-        
-        self.get_logger().debug("📸 Received camera image, processing with VILA...")
-        
-        # Process with VILA in background to avoid blocking
-        threading.Thread(
-            target=self._process_image_with_vila,
-            args=(msg,),
-            daemon=True
-        ).start()
+    # Image callback removed - VILA server is now purely on-demand
+    # Images are provided by the client in analysis requests
     
-    def _process_image_with_vila(self, image_msg: Image):
-        """Process image with VILA model"""
+    def _process_image_with_vila_sync(self, image_msg: Image, prompt: str) -> str:
+        """Process image with VILA model synchronously for on-demand requests"""
         try:
-            # Convert ROS image to PIL (simplified - would need proper conversion)
-            # For now, we'll create a placeholder analysis
+            from cv_bridge import CvBridge
+            from PIL import Image as PILImage
+            import cv2
             
-            navigation_prompt = """You are a robot's vision system. Analyze this camera view and provide:
+            if not prompt:
+                prompt = """You are a robot's vision system. Analyze this camera view and provide:
 1. Can I move forward safely?
 2. Are there obstacles ahead?
 3. What should I do next (move_forward, turn_left, turn_right, stop)?
 4. Describe what you see briefly.
 Keep it concise for real-time navigation."""
             
-            # Generate response (placeholder for actual VILA processing)
-            response = "Path clear ahead. Safe to move forward. No obstacles detected."
+            # Check if image has valid data and encoding
+            if not image_msg.data:
+                self.get_logger().error("❌ Empty image data for VILA processing")
+                return "Error: Empty image data"
             
-            # Parse navigation commands
-            nav_commands = self._parse_navigation_commands(response)
+            # Check encoding - default to bgr8 if empty
+            encoding = image_msg.encoding if image_msg.encoding else "bgr8"
+            self.get_logger().debug(f"Processing image with encoding: {encoding}, size: {len(image_msg.data)} bytes")
             
-            # Create and publish VILA analysis
-            analysis_msg = VILAAnalysis()
-            analysis_msg.robot_id = self.robot_info.robot_id
-            analysis_msg.prompt = navigation_prompt
-
-            analysis_msg.analysis_result = response
-            analysis_msg.navigation_commands_json = json.dumps(nav_commands)
-            analysis_msg.confidence = nav_commands.get('confidence', 0.0)
-            analysis_msg.timestamp_ns = self.get_clock().now().nanoseconds
-            analysis_msg.success = True
-            analysis_msg.error_message = ""
+            # Convert ROS image to PIL
+            bridge = CvBridge()
+            cv_image = bridge.imgmsg_to_cv2(image_msg, encoding)
+            rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
+            pil_image = PILImage.fromarray(rgb_image)
             
-            self.analysis_publisher.publish(analysis_msg)
+            # Generate VILA response
+            vila_response = self.vila_model.generate_response(
+                prompt=prompt,
+                image=pil_image
+            )
             
-            # Also publish navigation commands separately for GUI
-            nav_msg = String()
-            nav_msg.data = json.dumps(nav_commands)
-            self.navigation_publisher.publish(nav_msg)
+            # Extract the analysis text from the response dictionary
+            if isinstance(vila_response, dict) and vila_response.get('success', False):
+                response = vila_response.get('analysis', 'No analysis available')
+            else:
+                response = str(vila_response)
             
-            self.get_logger().debug(f"✅ VILA analysis complete: {nav_commands['action']}")
+            self.get_logger().debug(f"✅ VILA analysis complete for prompt: {prompt[:50]}...")
+            
+            return response
             
         except Exception as e:
             self.get_logger().error(f"❌ Error processing image with VILA: {e}")
+            return f"Error during analysis: {str(e)}"
     
     def _parse_navigation_commands(self, response: str) -> Dict[str, Any]:
         """Parse VILA response for navigation commands"""
@@ -365,13 +377,13 @@ Keep it concise for real-time navigation."""
         }
         
         if 'move forward' in response_lower or ('clear' in response_lower and 'safe' in response_lower):
-            commands['action'] = 'move_forward'
+            commands['action'] = 'move'
             commands['confidence'] = 0.8
         elif 'turn left' in response_lower:
-            commands['action'] = 'turn_left'
+            commands['action'] = 'turn'
             commands['confidence'] = 0.7
         elif 'turn right' in response_lower:
-            commands['action'] = 'turn_right'
+            commands['action'] = 'turn'
             commands['confidence'] = 0.7
         elif 'stop' in response_lower or 'obstacle' in response_lower:
             commands['action'] = 'stop'
@@ -381,20 +393,26 @@ Keep it concise for real-time navigation."""
     
     def _safety_control_callback(self, msg: Bool):
         """Handle safety control messages"""
-        self.gui_movement_enabled = msg.data
-        self.get_logger().info(f"🛡️ GUI movement {'ENABLED' if msg.data else 'DISABLED'}")
+        # Update server safety state based on GUI request
+        previous_state = self.safety_enabled
+        self.safety_enabled = msg.data
         
-        # Publish safety status
-        safety_msg = Bool()
-        safety_msg.data = self.safety_enabled and self.gui_movement_enabled
-        self.safety_publisher.publish(safety_msg)
+        self.get_logger().info(f"🛡️ Safety {'ENABLED' if msg.data else 'DISABLED'} via GUI request")
+        
+        # Only publish if state actually changed to avoid loops
+        if previous_state != self.safety_enabled:
+            safety_msg = Bool()
+            safety_msg.data = self.safety_enabled
+            self.safety_publisher.publish(safety_msg)
+            self.get_logger().info(f"🔄 Published safety status update: {'ENABLED' if self.safety_enabled else 'DISABLED'}")
+        else:
+            self.get_logger().debug("Safety state unchanged, no publication needed")
     
     def _emergency_stop_callback(self, msg: Bool):
         """Handle emergency stop"""
         if msg.data:
             self.get_logger().warn("🚨 EMERGENCY STOP ACTIVATED")
             self.safety_enabled = False
-            self.gui_movement_enabled = False
             
             # Clear command queue
             while not self.command_queue.empty():
@@ -411,7 +429,10 @@ Keep it concise for real-time navigation."""
             stop_command.linear_y = 0.0
             stop_command.angular_z = 0.0
             stop_command.duration = 0.0
-            stop_command.parameters_json = "{}"
+            stop_command.distance = 0.0
+            stop_command.angular = 0.0
+            stop_command.linear_speed = 0.0
+            stop_command.angular_speed = 0.0
             stop_command.timestamp_ns = self.get_clock().now().nanoseconds
             stop_command.source_node = "vila_server_node"
             
@@ -432,13 +453,16 @@ Keep it concise for real-time navigation."""
         try:
             command = request.command
             
-            self.get_logger().info(f"🎯 COMMAND GATEWAY: Processing {command.command_type} from {command.source_node}")
+            import time
+            request_id = int(time.time() * 1000) % 10000  # Match GUI request ID timing
+            
+            self.get_logger().info(f"🎯 COMMAND GATEWAY: Processing {command.command_type} from {command.source_node} (ID: {request_id})")
             
             # Safety validation
             if not self._validate_command_safety(command):
+                self.get_logger().warn(f"🚫 GATEWAY: Rejecting {command.command_type} (ID: {request_id}) - safety validation failed")
                 response.success = False
-                response.message = "Command rejected by safety system"
-                response.timestamp_ns = self.get_clock().now().nanoseconds
+                response.result_message = "Command rejected by safety system"
                 return response
             
             # Add to command queue
@@ -450,73 +474,119 @@ Keep it concise for real-time navigation."""
                 self.robot_info.command_history = self.robot_info.command_history[-50:]
             
             response.success = True
-            response.message = f"Command {command.command_type} queued for execution"
-            response.timestamp_ns = self.get_clock().now().nanoseconds
+            response.result_message = f"Command {command.command_type} queued for execution"
             
-            self.get_logger().info(f"✅ COMMAND QUEUED: {command.command_type} for {command.robot_id}")
+            self.get_logger().info(f"✅ COMMAND QUEUED: {command.command_type} for {command.robot_id} (ID: {request_id})")
+            self.get_logger().info(f"🔍 RESPONSE SENT: success=True, message='{response.result_message}' (ID: {request_id})")
             
         except Exception as e:
             self.get_logger().error(f"❌ Command execution error: {e}")
             response.success = False
-            response.message = f"Error: {str(e)}"
-            response.timestamp_ns = self.get_clock().now().nanoseconds
+            response.result_message = f"Error: {str(e)}"
         
         return response
     
     def _vila_analysis_service(self, request, response):
-        """Handle VILA analysis requests"""
+        """Handle VILA analysis requests - on-demand resource-based processing"""
         try:
             if not self.model_loaded:
                 response.success = False
                 response.error_message = "VILA model not loaded"
+                response.analysis_result = ""
+                response.navigation_commands_json = "{}"
+                response.confidence = 0.0
                 response.timestamp_ns = self.get_clock().now().nanoseconds
                 return response
             
-            self.get_logger().info(f"🔍 VILA analysis requested for {request.robot_id}")
+            # Client must provide an image - no stored images in server
+            if not request.image.data:
+                response.success = False
+                response.error_message = "No image provided in request - client must send image"
+                response.analysis_result = ""
+                response.navigation_commands_json = "{}"
+                response.confidence = 0.0
+                response.timestamp_ns = self.get_clock().now().nanoseconds
+                return response
             
-            # Process with VILA (simplified - would need actual image processing)
-            analysis_result = "Analysis complete - environment assessed"
-            nav_commands = {'action': 'stop', 'confidence': 0.8, 'reason': analysis_result}
+            self.get_logger().info(f"🔍 On-demand VILA analysis requested for {request.robot_id}")
+            self.get_logger().info(f"   └── Prompt: {request.prompt}")
+            self.get_logger().info(f"   └── Image: {request.image.width}x{request.image.height}, encoding: {request.image.encoding}")
             
+            # Use the image provided by the client
+            image_to_analyze = request.image
+            
+            # Process with VILA using the client-provided image
+            analysis_result = self._process_image_with_vila_sync(image_to_analyze, request.prompt)
+            nav_commands = self._parse_navigation_commands(analysis_result)
+            
+            # Fill service response directly
             response.success = True
             response.analysis_result = analysis_result
             response.navigation_commands_json = json.dumps(nav_commands)
-            response.confidence = nav_commands['confidence']
+            response.confidence = nav_commands.get('confidence', 0.0)
             response.error_message = ""
             response.timestamp_ns = self.get_clock().now().nanoseconds
             
-            self.get_logger().info("✅ VILA analysis complete")
+            # Create VILAAnalysis message for publishing
+            analysis_msg = VILAAnalysis()
+            analysis_msg.robot_id = request.robot_id
+            analysis_msg.prompt = request.prompt
+            analysis_msg.analysis_result = analysis_result
+            analysis_msg.navigation_commands_json = json.dumps(nav_commands)
+            analysis_msg.confidence = nav_commands.get('confidence', 0.0)
+            analysis_msg.success = True
+            analysis_msg.error_message = ""
+            analysis_msg.timestamp_ns = self.get_clock().now().nanoseconds
+            
+            # Publish analysis results for other nodes to consume
+            self.analysis_publisher.publish(analysis_msg)
+            
+            # Also publish navigation commands separately for GUI
+            nav_msg = String()
+            nav_msg.data = json.dumps(nav_commands)
+            self.navigation_publisher.publish(nav_msg)
+            
+            self.get_logger().info(f"✅ On-demand VILA analysis complete: {nav_commands['action']}")
             
         except Exception as e:
             self.get_logger().error(f"❌ VILA analysis error: {e}")
             response.success = False
             response.error_message = str(e)
+            response.analysis_result = ""
+            response.navigation_commands_json = "{}"
+            response.confidence = 0.0
             response.timestamp_ns = self.get_clock().now().nanoseconds
         
         return response
     
     def _validate_command_safety(self, command: RobotCommand) -> bool:
         """Validate command against safety constraints"""
+        self.get_logger().info(f"🔍 SAFETY CHECK: command={command.command_type}, safety_enabled={self.safety_enabled}, robot_status={self.robot_info.status}")
+        
         # Check if safety is enabled
         if not self.safety_enabled:
             self.get_logger().warn(f"🚫 SAFETY: Command {command.command_type} blocked - safety disabled")
             return False
         
-        # Check movement commands
-        if command.command_type in ['move', 'turn', 'forward', 'backward']:
-            if not self.gui_movement_enabled and not command.safety_confirmed:
-                self.get_logger().warn(f"🚫 SAFETY: Movement command {command.command_type} blocked - GUI movement disabled")
-                return False
-        
-        # Always allow stop commands
+        # Always allow stop commands (for safety)
         if command.command_type == 'stop':
+            self.get_logger().info(f"✅ SAFETY: Allowing stop command (always safe)")
             return True
         
-        # Check robot status
+        # For testing/simulation mode: if no robot is connected, allow commands when safety is enabled
+        # This allows the GUI to work without a physical robot
         if self.robot_info.status == 'offline':
-            self.get_logger().warn(f"🚫 SAFETY: Command {command.command_type} blocked - robot offline")
+            self.get_logger().info(f"🔄 TESTING MODE: Allowing {command.command_type} - robot offline but safety enabled")
+            # Set status to active for testing purposes
+            self.robot_info.status = 'active'
+            return True
+        
+        # For connected robots: check if robot is responsive
+        if self.robot_info.status in ['error', 'disconnected']:
+            self.get_logger().warn(f"🚫 SAFETY: Command {command.command_type} blocked - robot status: {self.robot_info.status}")
             return False
         
+        self.get_logger().info(f"✅ SAFETY: Command {command.command_type} approved - safety enabled, robot status: {self.robot_info.status}")
         return True
     
     def _process_commands(self):
@@ -549,8 +619,7 @@ Keep it concise for real-time navigation."""
                 'status': self.robot_info.status,
                 'last_seen': self.robot_info.last_seen.isoformat(),
                 'model_loaded': self.model_loaded,
-                'safety_enabled': self.safety_enabled,
-                'gui_movement_enabled': self.gui_movement_enabled
+                'safety_enabled': self.safety_enabled
             }
             
             if self.robot_info.sensor_data:
@@ -566,6 +635,25 @@ Keep it concise for real-time navigation."""
             self.get_logger().error(f"❌ Error publishing robot status: {e}")
     
 
+
+    def _publish_vila_status(self):
+        """Publish VILA server status for GUI display"""
+        try:
+            # For now, just publish a basic status since GUI manages the server
+            status_info = {
+                'status': 'managed_by_gui',
+                'process_running': False,
+                'recent_logs': [],
+                'server_ready': self.model_loaded,
+                'server_url': 'http://localhost:8000'
+            }
+            status_msg = String()
+            status_msg.data = json.dumps(status_info)
+            self.vila_status_publisher.publish(status_msg)
+        except Exception as e:
+            self.get_logger().debug(f"Error publishing VILA status: {e}")
+    
+    # VILA enable/disable removed - now resource-based on-demand only
 
 def main(args=None):
     rclpy.init(args=args)

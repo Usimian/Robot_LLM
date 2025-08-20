@@ -6,7 +6,7 @@ Provides realistic sensor data simulation for testing when robot is not availabl
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 import time
 import random
 import math
@@ -14,7 +14,7 @@ from typing import Dict, Any
 
 # ROS2 message imports
 from robot_msgs.msg import SensorData
-from sensor_msgs.msg import Image as RosImage
+from sensor_msgs.msg import Image as RosImage, CameraInfo, PointCloud2
 from geometry_msgs.msg import Vector3
 from std_msgs.msg import Header
 from cv_bridge import CvBridge
@@ -50,6 +50,22 @@ class SensorSimulatorNode(Node):
             depth=10
         )
         
+        # QoS profile for image streams (matching subscribers - RELIABLE for consistency)
+        self.image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        
+        # QoS profile for camera info (to match RealSense driver - VOLATILE durability)
+        self.camera_info_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        
         # Publishers
         self.sensor_publisher = self.create_publisher(
             SensorData,
@@ -60,11 +76,48 @@ class SensorSimulatorNode(Node):
 
         
         if self.camera_enabled:
+            # Color image publisher (matching RealSense namespace and QoS)
             self.image_publisher = self.create_publisher(
                 RosImage,
-                '/robot/camera/image_raw',
+                '/realsense/camera/color/image_raw',
+                self.image_qos
+            )
+            
+            # Depth image publisher
+            self.depth_publisher = self.create_publisher(
+                RosImage,
+                '/realsense/camera/depth/image_rect_raw',
+                self.image_qos
+            )
+            
+            # Aligned depth to color publisher (new topic from documentation)
+            self.aligned_depth_publisher = self.create_publisher(
+                RosImage,
+                '/realsense/camera/aligned_depth_to_color/image_raw',
+                self.image_qos
+            )
+            
+            # Color camera info publisher
+            self.color_info_publisher = self.create_publisher(
+                CameraInfo,
+                '/realsense/camera/color/camera_info',
+                self.camera_info_qos
+            )
+            
+            # Depth camera info publisher
+            self.depth_info_publisher = self.create_publisher(
+                CameraInfo,
+                '/realsense/camera/depth/camera_info',
+                self.camera_info_qos
+            )
+            
+            # Point cloud publisher (keeping original topic as per documentation)
+            self.pointcloud_publisher = self.create_publisher(
+                PointCloud2,
+                '/camera/depth/points',
                 self.reliable_qos
             )
+            
             # CV Bridge for image conversion
             self.bridge = CvBridge()
         
@@ -108,9 +161,13 @@ class SensorSimulatorNode(Node):
         
 
         
-        # Camera image timer (10 Hz) if enabled
+        # Camera timers (30 Hz for responsive video) if enabled
         if self.camera_enabled:
-            self.image_timer = self.create_timer(0.1, self._publish_simulated_image)
+            self.image_timer = self.create_timer(0.033, self._publish_simulated_image)  # ~30 Hz
+            self.depth_timer = self.create_timer(0.033, self._publish_simulated_depth)  # ~30 Hz
+            self.aligned_depth_timer = self.create_timer(0.033, self._publish_simulated_aligned_depth)  # ~30 Hz
+            self.camera_info_timer = self.create_timer(1.0, self._publish_camera_info)  # 1 Hz for camera info
+            self.pointcloud_timer = self.create_timer(0.2, self._publish_simulated_pointcloud)  # 5 Hz for point cloud
         
         # Simulation update timer (10 Hz)
         self.update_timer = self.create_timer(0.1, self._update_simulation)
@@ -126,8 +183,8 @@ class SensorSimulatorNode(Node):
             self.initial_battery - (self.battery_drain_rate * time_minutes)
         )
         
-        # Update battery voltage based on percentage
-        voltage_range = (10.8, 12.6)  # Typical Li-ion range
+        # Update battery voltage based on percentage (extended range for color testing)
+        voltage_range = (10.0, 12.6)  # Extended range to test all color thresholds
         voltage_ratio = self.battery_percentage / 100.0
         self.sensor_data["battery_voltage"] = (
             voltage_range[0] + 
@@ -238,8 +295,158 @@ class SensorSimulatorNode(Node):
             # Publish image
             self.image_publisher.publish(ros_image)
             
+            # Log publishing info every 30 frames (~1 second at 30 Hz)
+            if int(self.simulation_time * 30) % 30 == 0:
+                self.get_logger().debug(f"📸 Published camera image: {width}x{height}, encoding: bgr8")
+            
         except Exception as e:
             self.get_logger().error(f"Error publishing simulated image: {e}")
+    
+    def _publish_simulated_depth(self):
+        """Publish simulated depth images"""
+        if not self.camera_enabled:
+            return
+            
+        try:
+            # Create a simple depth image (16-bit)
+            height, width = 480, 640
+            
+            # Create depth image with simulated distance values (in mm)
+            depth_image = np.zeros((height, width), dtype=np.uint16)
+            
+            # Add gradient depth pattern (closer objects have smaller values)
+            for y in range(height):
+                for x in range(width):
+                    # Simulate depth from 500mm to 3000mm
+                    base_depth = 1500  # 1.5m base distance
+                    variation = 500 * math.sin(x * 0.01 + self.simulation_time * 0.3)
+                    depth_image[y, x] = max(500, min(3000, base_depth + variation))
+            
+            # Add simulated object (closer depth)
+            center_x = int(320 + 200 * math.sin(self.simulation_time * 0.5))
+            center_y = int(240 + 100 * math.cos(self.simulation_time * 0.3))
+            cv2.circle(depth_image, (center_x, center_y), 30, 800, -1)  # 80cm object
+            
+            # Convert to ROS Image message
+            header = Header()
+            header.stamp = self.get_clock().now().to_msg()
+            header.frame_id = "camera_depth_optical_frame"
+            
+            ros_depth = self.bridge.cv2_to_imgmsg(depth_image, "16UC1")
+            ros_depth.header = header
+            
+            # Publish depth image
+            self.depth_publisher.publish(ros_depth)
+            
+        except Exception as e:
+            self.get_logger().error(f"Error publishing simulated depth: {e}")
+    
+    def _publish_simulated_aligned_depth(self):
+        """Publish simulated aligned depth to color images"""
+        if not self.camera_enabled:
+            return
+            
+        try:
+            # Create aligned depth image (same as depth but aligned to color frame)
+            height, width = 480, 640
+            
+            # Create aligned depth image with simulated distance values (in mm)
+            aligned_depth_image = np.zeros((height, width), dtype=np.uint16)
+            
+            # Add gradient depth pattern (similar to regular depth but aligned)
+            for y in range(height):
+                for x in range(width):
+                    # Simulate depth from 500mm to 3000mm
+                    base_depth = 1400  # Slightly different base for aligned
+                    variation = 400 * math.sin(x * 0.01 + self.simulation_time * 0.25)
+                    aligned_depth_image[y, x] = max(500, min(3000, base_depth + variation))
+            
+            # Add simulated object (closer depth, aligned to color)
+            center_x = int(320 + 200 * math.sin(self.simulation_time * 0.5))
+            center_y = int(240 + 100 * math.cos(self.simulation_time * 0.3))
+            cv2.circle(aligned_depth_image, (center_x, center_y), 35, 750, -1)  # 75cm object
+            
+            # Convert to ROS Image message
+            header = Header()
+            header.stamp = self.get_clock().now().to_msg()
+            header.frame_id = "camera_color_optical_frame"  # Aligned to color frame
+            
+            ros_aligned_depth = self.bridge.cv2_to_imgmsg(aligned_depth_image, "16UC1")
+            ros_aligned_depth.header = header
+            
+            # Publish aligned depth image
+            self.aligned_depth_publisher.publish(ros_aligned_depth)
+            
+        except Exception as e:
+            self.get_logger().error(f"Error publishing simulated aligned depth: {e}")
+    
+    def _publish_camera_info(self):
+        """Publish camera calibration info for both color and depth cameras"""
+        if not self.camera_enabled:
+            return
+            
+        try:
+            # Create camera info message with typical RealSense D435i parameters
+            header = Header()
+            header.stamp = self.get_clock().now().to_msg()
+            
+            # Color camera info
+            color_info = CameraInfo()
+            color_info.header = header
+            color_info.header.frame_id = "camera_color_optical_frame"
+            color_info.width = 640
+            color_info.height = 480
+            color_info.distortion_model = "plumb_bob"
+            # Typical D435i color camera intrinsics (approximate)
+            color_info.k = [615.0, 0.0, 320.0, 0.0, 615.0, 240.0, 0.0, 0.0, 1.0]
+            color_info.d = [0.0, 0.0, 0.0, 0.0, 0.0]  # No distortion for simulation
+            color_info.p = [615.0, 0.0, 320.0, 0.0, 0.0, 615.0, 240.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+            
+            # Depth camera info
+            depth_info = CameraInfo()
+            depth_info.header = header
+            depth_info.header.frame_id = "camera_depth_optical_frame"
+            depth_info.width = 640
+            depth_info.height = 480
+            depth_info.distortion_model = "plumb_bob"
+            # Typical D435i depth camera intrinsics (approximate)
+            depth_info.k = [385.0, 0.0, 320.0, 0.0, 385.0, 240.0, 0.0, 0.0, 1.0]
+            depth_info.d = [0.0, 0.0, 0.0, 0.0, 0.0]  # No distortion for simulation
+            depth_info.p = [385.0, 0.0, 320.0, 0.0, 0.0, 385.0, 240.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+            
+            # Publish camera info
+            self.color_info_publisher.publish(color_info)
+            self.depth_info_publisher.publish(depth_info)
+            
+        except Exception as e:
+            self.get_logger().error(f"Error publishing camera info: {e}")
+    
+    def _publish_simulated_pointcloud(self):
+        """Publish simulated point cloud data"""
+        if not self.camera_enabled:
+            return
+            
+        try:
+            # Create a simple point cloud message
+            # For now, just create the message structure - actual point cloud generation
+            # would require more complex 3D geometry
+            
+            header = Header()
+            header.stamp = self.get_clock().now().to_msg()
+            header.frame_id = "camera_depth_optical_frame"
+            
+            pointcloud = PointCloud2()
+            pointcloud.header = header
+            pointcloud.height = 1  # Unorganized point cloud
+            pointcloud.width = 100  # Simplified with 100 points
+            pointcloud.is_dense = False
+            
+            # TODO: Generate actual point cloud data
+            # For simulation, we'll publish an empty point cloud structure
+            self.pointcloud_publisher.publish(pointcloud)
+            
+        except Exception as e:
+            self.get_logger().error(f"Error publishing simulated point cloud: {e}")
 
 def main(args=None):
     """Main function"""

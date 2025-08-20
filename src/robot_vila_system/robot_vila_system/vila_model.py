@@ -2,251 +2,414 @@
 """
 VILA Model Interface for ROS2
 Provides a simplified interface to the VILA vision-language model for ROS2 integration
+Uses HTTP client approach to communicate with VILA server
 """
 
 import os
 import sys
 import logging
 import numpy as np
-from typing import Dict, List, Optional, Any, Tuple
-from PIL import Image
+import requests
+import json
 import base64
 import io
+import time
+import subprocess
+import threading
+from typing import Dict, List, Optional, Any, Tuple
+from PIL import Image
 
 # Configure logging
 logger = logging.getLogger('VILAModel')
 
+# VILA Server Configuration
+VILA_SERVER_URL = "http://localhost:8000"
+VILA_MODEL_NAME = "VILA1.5-3B"
+VILA_SERVER_TIMEOUT = 30  # seconds
+
 class VILAModel:
     """
-    VILA Vision-Language Model Interface
-    Provides a simplified interface for robot vision-language tasks
+    VILA Model Interface using HTTP client approach
+    Communicates with VILA server via REST API and manages server lifecycle
     """
     
-    def __init__(self, model_path: Optional[str] = None, device: str = "cpu"):
-        """
-        Initialize the VILA model
+    def __init__(self, auto_start_server=True):
+        """Initialize the VILA HTTP client with optional server management"""
+        self.server_url = VILA_SERVER_URL
+        self.model_name = VILA_MODEL_NAME
+        self.server_ready = False
+        self.auto_start_server = auto_start_server
+        self.server_process = None
+        self.server_monitor_thread = None
+        self.server_status = "stopped"  # stopped, starting, running, error
+        self.server_logs = []
+        self.max_log_lines = 100
         
-        Args:
-            model_path: Path to the VILA model (optional for now)
-            device: Device to run the model on ('cpu' or 'cuda')
-        """
-        self.model_path = model_path
-        self.device = device
-        self.model_loaded = False
-        self.model = None
+        logger.info(f"🚀 Initializing VILA HTTP client for server: {self.server_url}")
         
-        logger.info(f"🚀 Initializing VILA Model (device: {device})")
-        
-        # For now, simulate model initialization
-        self._simulate_model_loading()
+        if auto_start_server:
+            self.start_server()
     
-    def _simulate_model_loading(self):
-        """Simulate VILA model loading for development"""
-        # TODO: Replace with actual VILA model loading
-        logger.info("📝 Simulating VILA model loading...")
-        self.model_loaded = False  # Set to False until real model is implemented
-        logger.info("✅ VILA model simulation ready")
-    
-    def analyze_image(self, image: Image.Image, prompt: str = "Describe what you see") -> Dict[str, Any]:
-        """
-        Analyze an image with a text prompt
-        
-        Args:
-            image: PIL Image to analyze
-            prompt: Text prompt for the analysis
-            
-        Returns:
-            Dictionary containing analysis results
-        """
-        if not self.model_loaded:
-            return {
-                "success": False,
-                "error": "Model not loaded",
-                "analysis": "Model unavailable"
-            }
+    def start_server(self):
+        """Start the VILA server subprocess"""
+        if self.server_process and self.server_process.poll() is None:
+            logger.info("🔄 VILA server already running")
+            return
         
         try:
-            # TODO: Replace with actual VILA inference
-            logger.info(f"🔍 Analyzing image with prompt: '{prompt}'")
+            logger.info("🚀 Starting VILA server...")
+            self.server_status = "starting"
             
-            # Simulate analysis
-            analysis = self._simulate_analysis(image, prompt)
+            # Find the simple_vila_server.py script
+            workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+            server_script = os.path.join(workspace_root, "simple_vila_server.py")
             
-            return {
-                "success": True,
-                "analysis": analysis,
-                "confidence": 0.85,
-                "prompt": prompt,
-                "image_size": image.size
-            }
+            if not os.path.exists(server_script):
+                # Try alternative locations
+                server_script = os.path.join(os.getcwd(), "simple_vila_server.py")
+                if not os.path.exists(server_script):
+                    raise FileNotFoundError(f"VILA server script not found at {server_script}")
+            
+            # Start the server process
+            self.server_process = subprocess.Popen(
+                [sys.executable, server_script, "--port", "8000"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1
+            )
+            
+            # Start monitoring thread
+            self.server_monitor_thread = threading.Thread(
+                target=self._monitor_server_output,
+                daemon=True
+            )
+            self.server_monitor_thread.start()
+            
+            logger.info("✅ VILA server startup initiated")
             
         except Exception as e:
-            logger.error(f"❌ Image analysis failed: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "analysis": "Analysis failed"
-            }
+            logger.error(f"❌ Failed to start VILA server: {e}")
+            self.server_status = "error"
+            self.server_logs.append(f"ERROR: Failed to start server: {e}")
     
-    def generate_response(self, image: Image.Image, prompt: str = "Describe what you see") -> Dict[str, Any]:
+    def stop_server(self):
+        """Stop the VILA server subprocess"""
+        if self.server_process:
+            logger.info("🛑 Stopping VILA server...")
+            self.server_process.terminate()
+            try:
+                self.server_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                logger.warning("⚠️ Force killing VILA server...")
+                self.server_process.kill()
+            self.server_process = None
+            self.server_status = "stopped"
+            logger.info("✅ VILA server stopped")
+    
+    def restart_server(self):
+        """Restart the VILA server"""
+        logger.info("🔄 Restarting VILA server...")
+        self.stop_server()
+        time.sleep(2)
+        self.start_server()
+    
+    def _monitor_server_output(self):
+        """Monitor server output in background thread"""
+        if not self.server_process:
+            return
+            
+        try:
+            for line in iter(self.server_process.stdout.readline, ''):
+                if line:
+                    line = line.strip()
+                    self.server_logs.append(line)
+                    
+                    # Keep log size manageable
+                    if len(self.server_logs) > self.max_log_lines:
+                        self.server_logs = self.server_logs[-self.max_log_lines:]
+                    
+                    # Update status based on log messages
+                    if "✅ Simple VILA Server ready!" in line:
+                        self.server_status = "running"
+                        logger.info("✅ VILA server is ready")
+                    elif "ERROR" in line or "Traceback" in line:
+                        self.server_status = "error"
+                
+                # Check if process is still running
+                if self.server_process and self.server_process.poll() is not None:
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Error monitoring server: {e}")
+        
+        # Process ended
+        if self.server_status == "starting":
+            self.server_status = "error"
+        elif self.server_status == "running":
+            self.server_status = "stopped"
+    
+    def get_server_status(self) -> Dict[str, Any]:
+        """Get current server status and recent logs"""
+        is_running = self.server_process and self.server_process.poll() is None
+        return {
+            'status': self.server_status,
+            'process_running': is_running,
+            'recent_logs': self.server_logs[-10:],  # Last 10 log lines
+            'server_ready': self.server_ready,
+            'server_url': self.server_url
+        }
+    
+    def load_model(self, model_path: str = None) -> bool:
         """
-        Generate a response based on image and prompt (alias for analyze_image)
+        Check if VILA server is available and ready
         
         Args:
-            image: PIL Image to analyze
-            prompt: Text prompt for the analysis
+            model_path: Ignored in HTTP client mode
             
         Returns:
-            Dictionary containing analysis results
+            bool: True if server is ready, False otherwise
         """
-        return self.analyze_image(image, prompt)
-    
-    def _simulate_analysis(self, image: Image.Image, prompt: str) -> str:
-        """Simulate VILA analysis for testing"""
-        # Basic analysis based on image properties
-        width, height = image.size
-        
-        if "navigate" in prompt.lower() or "move" in prompt.lower():
-            return f"I can see a scene that is {width}x{height} pixels. For navigation, I recommend proceeding carefully and checking for obstacles."
-        elif "describe" in prompt.lower():
-            return f"I can see an image with dimensions {width}x{height}. The image appears to contain visual information that would be processed by the VILA model."
-        elif "object" in prompt.lower():
-            return "I can detect various objects in the scene. Further analysis would require the full VILA model to be loaded."
-        else:
-            return f"Image analysis complete. Dimensions: {width}x{height}. Response to: '{prompt}'"
-    
-    def generate_robot_command(self, image: Image.Image, task: str) -> Dict[str, Any]:
-        """
-        Generate robot commands based on image analysis and task
-        
-        Args:
-            image: PIL Image to analyze
-            task: Task description (e.g., "navigate to the door")
-            
-        Returns:
-            Dictionary containing command suggestions
-        """
-        if not self.model_loaded:
-            return {
-                "success": False,
-                "error": "Model not loaded",
-                "commands": []
-            }
-        
         try:
-            logger.info(f"🎯 Generating commands for task: '{task}'")
+            logger.info(f"🔗 Checking VILA server availability at {self.server_url}")
             
-            # TODO: Replace with actual VILA command generation
-            commands = self._simulate_command_generation(image, task)
-            
-            return {
-                "success": True,
-                "task": task,
-                "commands": commands,
-                "confidence": 0.75,
-                "image_size": image.size
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Command generation failed: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "commands": []
-            }
-    
-    def _simulate_command_generation(self, image: Image.Image, task: str) -> List[Dict[str, Any]]:
-        """Simulate robot command generation"""
-        width, height = image.size
-        
-        # Simple command generation based on task keywords
-        commands = []
-        
-        if "forward" in task.lower() or "ahead" in task.lower():
-            commands.append({
-                "action": "move_forward",
-                "speed": 0.2,
-                "duration": 2.0,
-                "reason": "Moving forward as requested"
-            })
-        elif "back" in task.lower() or "reverse" in task.lower():
-            commands.append({
-                "action": "move_backward", 
-                "speed": 0.2,
-                "duration": 1.5,
-                "reason": "Moving backward as requested"
-            })
-        elif "left" in task.lower():
-            commands.append({
-                "action": "turn_left",
-                "speed": 0.3,
-                "duration": 1.0,
-                "reason": "Turning left as requested"
-            })
-        elif "right" in task.lower():
-            commands.append({
-                "action": "turn_right",
-                "speed": 0.3,
-                "duration": 1.0,
-                "reason": "Turning right as requested"
-            })
-        else:
-            # Default exploration behavior
-            commands.append({
-                "action": "move_forward",
-                "speed": 0.1,
-                "duration": 1.0,
-                "reason": f"Exploring based on task: {task}"
-            })
-        
-        return commands
-    
-    def load_model(self) -> bool:
-        """
-        Load the VILA model (if not already loaded)
-        
-        Returns:
-            True if model loaded successfully, False otherwise
-        """
-        if self.model_loaded:
-            return True
-        
-        try:
-            logger.info("🔄 Loading VILA model...")
-            # TODO: Implement actual model loading
-            # self.model = load_vila_model(self.model_path, self.device)
-            
-            # For now, simulate successful loading
-            self.model_loaded = True
-            logger.info("✅ VILA model loaded successfully")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to load VILA model: {e}")
+            # Try to connect to the server
+            response = requests.get(f"{self.server_url}/health", timeout=5)
+            if response.status_code == 200:
+                self.server_ready = True
+                logger.info("✅ VILA server is ready")
+                return True
+            else:
+                logger.warning(f"⚠️ VILA server responded with status {response.status_code}")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"⚠️ VILA server not available: {e}")
+            logger.info("💡 Make sure to start VILA server with: cd VILA && python server.py --model-path VILA1.5-3B")
             return False
     
-    def is_loaded(self) -> bool:
-        """Check if the model is loaded"""
-        return self.model_loaded
+    def generate_response(self, prompt: str, image: Image.Image) -> Dict[str, Any]:
+        """
+        Generate a response using VILA server (wrapper for ROS2 compatibility)
+        
+        Args:
+            prompt: Text prompt for analysis
+            image: PIL Image to analyze
+            
+        Returns:
+            Dict with success flag and analysis result
+        """
+        try:
+            analysis_result = self.analyze_image(image, prompt)
+            return {
+                'success': True,
+                'analysis': analysis_result
+            }
+        except Exception as e:
+            logger.error(f"Error in generate_response: {e}")
+            return {
+                'success': False,
+                'analysis': f"Error: {str(e)}"
+            }
+    
+    def analyze_image(self, image: Image.Image, prompt: str = None) -> str:
+        """
+        Analyze an image using VILA server
+        
+        Args:
+            image: PIL Image to analyze
+            prompt: Optional text prompt for analysis
+            
+        Returns:
+            str: Analysis result from VILA
+        """
+        if not self.server_ready:
+            if not self.load_model():
+                return "VILA server not available"
+        
+        try:
+            # Convert PIL image to base64
+            buffered = io.BytesIO()
+            image.save(buffered, format="JPEG")
+            img_base64 = base64.b64encode(buffered.getvalue()).decode()
+            
+            # Default prompt for robot navigation
+            if prompt is None:
+                prompt = ("Analyze this image from a robot's camera. Describe what you see and suggest "
+                         "a navigation command (forward, backward, turn_left, turn_right, or stop) "
+                         "to help the robot navigate safely.")
+            
+            # Prepare request payload
+            payload = {
+                "model": self.model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"}
+                            }
+                        ]
+                    }
+                ],
+                "max_tokens": 150,
+                "temperature": 0.1
+            }
+            
+            logger.info("📤 Sending image analysis request to VILA server")
+            
+            # Send request to VILA server
+            response = requests.post(
+                f"{self.server_url}/v1/chat/completions",
+                json=payload,
+                timeout=VILA_SERVER_TIMEOUT,
+                headers={"Content-Type": "application/json"}
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                analysis = result["choices"][0]["message"]["content"]
+                logger.info(f"✅ VILA analysis received: {analysis[:100]}...")
+                return analysis
+            else:
+                error_msg = f"VILA server error: {response.status_code} - {response.text}"
+                logger.error(error_msg)
+                return error_msg
+                
+        except requests.exceptions.Timeout:
+            error_msg = "VILA server request timed out"
+            logger.error(error_msg)
+            return error_msg
+        except Exception as e:
+            error_msg = f"Error communicating with VILA server: {e}"
+            logger.error(error_msg)
+            return error_msg
+    
+    def generate_robot_command(self, image: Image.Image, context: str = "") -> Dict[str, Any]:
+        """
+        Generate robot navigation command based on image analysis
+        
+        Args:
+            image: PIL Image from robot camera
+            context: Additional context about robot state
+            
+        Returns:
+            Dict containing navigation command and confidence
+        """
+        try:
+            # Create navigation-specific prompt
+            nav_prompt = (
+                "You are a robot navigation assistant. Analyze this camera image and provide "
+                "a navigation command. Respond with ONLY one of these commands: "
+                "forward, backward, turn_left, turn_right, or stop. "
+                "Consider obstacles, paths, and safety. "
+                f"Additional context: {context}"
+            )
+            
+            # Get analysis from VILA
+            analysis = self.analyze_image(image, nav_prompt)
+            
+            # Parse the response to extract command
+            command = self._parse_navigation_command(analysis)
+            
+            result = {
+                'command': command,
+                'confidence': 0.8,  # Default confidence for HTTP client mode
+                'reasoning': analysis,
+                'timestamp': time.time()
+            }
+            
+            logger.info(f"🎯 Generated robot command: {command}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Error generating robot command: {e}")
+            return {
+                'command': 'stop',
+                'confidence': 0.0,
+                'reasoning': f"Error: {e}",
+                'timestamp': time.time()
+            }
+    
+    def _parse_navigation_command(self, analysis: str) -> str:
+        """
+        Parse VILA analysis to extract navigation command
+        
+        Args:
+            analysis: Text analysis from VILA
+            
+        Returns:
+            str: Navigation command (forward, backward, turn_left, turn_right, stop)
+        """
+        analysis_lower = analysis.lower()
+        
+        # Priority order for command detection
+        if any(word in analysis_lower for word in ['stop', 'halt', 'wait', 'danger', 'obstacle']):
+            return 'stop'
+        elif any(word in analysis_lower for word in ['forward', 'ahead', 'straight', 'continue']):
+            return 'forward'
+        elif any(word in analysis_lower for word in ['backward', 'back', 'reverse']):
+            return 'backward'
+        elif any(word in analysis_lower for word in ['turn left', 'left', 'turn_left']):
+            return 'turn_left'
+        elif any(word in analysis_lower for word in ['turn right', 'right', 'turn_right']):
+            return 'turn_right'
+        else:
+            # Default to stop if unclear
+            logger.warning(f"⚠️ Unclear navigation command in analysis: {analysis[:100]}")
+            return 'stop'
+    
+    def is_model_loaded(self) -> bool:
+        """Check if VILA server is ready"""
+        return self.server_ready
     
     def get_model_info(self) -> Dict[str, Any]:
-        """Get information about the loaded model"""
+        """Get information about the VILA model/server"""
+        status = self.get_server_status()
         return {
-            "model_path": self.model_path,
-            "device": self.device,
-            "loaded": self.model_loaded,
-            "model_type": "VILA (simulated)"
+            'model_type': 'VILA HTTP Client with Server Management',
+            'server_url': self.server_url,
+            'model_name': self.model_name,
+            'server_ready': self.server_ready,
+            'timeout': VILA_SERVER_TIMEOUT,
+            'server_status': status['status'],
+            'process_running': status['process_running'],
+            'auto_start_enabled': self.auto_start_server
         }
-
-def create_vila_model(model_path: Optional[str] = None, device: str = "cpu") -> VILAModel:
-    """
-    Factory function to create a VILA model instance
     
-    Args:
-        model_path: Path to the VILA model
-        device: Device to run on
+    def __del__(self):
+        """Cleanup on deletion"""
+        try:
+            if self.server_process:
+                self.stop_server()
+        except:
+            pass
+
+
+# For backward compatibility
+def create_vila_model() -> VILAModel:
+    """Create and return a VILAModel instance"""
+    return VILAModel()
+
+
+if __name__ == "__main__":
+    # Test the VILA HTTP client
+    logging.basicConfig(level=logging.INFO)
+    
+    vila = VILAModel()
+    print(f"Model info: {vila.get_model_info()}")
+    
+    # Test server connection
+    if vila.load_model():
+        print("✅ VILA server is ready for testing")
         
-    Returns:
-        VILAModel instance
-    """
-    return VILAModel(model_path=model_path, device=device)
+        # Create a test image
+        test_image = Image.new('RGB', (640, 480), color='blue')
+        
+        # Test analysis
+        result = vila.generate_robot_command(test_image, "Testing robot navigation")
+        print(f"Test result: {result}")
+    else:
+        print("❌ VILA server not available. Start with: cd VILA && python server.py --model-path VILA1.5-3B")

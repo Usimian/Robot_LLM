@@ -6,9 +6,10 @@ alwaysApply: true
 The application is a client/server system.
   The client runs on an AMD64 ubuntu 22.04 PC in a python/tkinter/ROS2 framework (this workspace)
   The server runs on a jetson orin nano connected via ssh.
+  All messaging should be done through ROS2 nodes and topics.
 Always check the terminal output for errors after running a terminal command.
 There is only one hardware robot at 192.168.1.166.
-All communications with the robot are "pulled" from this client.
-A copy of the server code is at /home/marc/yahboomcar_ros2/yahboomcar_ws, do not modify the server code
-  The server code is a ROS2 system.
-  The server interface will be in the slam_nav package.
+All communications with the robot are requested by this client.
+A copy of the server code is at /home/marc/yahboomcar_ros2/yahboomcar_ws, do not modify the server code.
+The server interface will be in the slam_nav package.
+Build ROS2 packages without --symlink-install

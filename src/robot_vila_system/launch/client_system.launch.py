@@ -51,20 +51,6 @@ def generate_launch_description():
         condition=IfCondition(vila_enabled)
     )
     
-    # VILA Vision Node (runs on client - has direct access to VILA model)
-    vila_vision_node = Node(
-        package='robot_vila_system',
-        executable='vila_vision_node.py',
-        name='vila_vision',
-        namespace='client',
-        parameters=[{
-            'robot_id': robot_id,
-        }],
-        output='screen',
-        emulate_tty=True,
-        condition=IfCondition(vila_enabled)
-    )
-    
     # Robot GUI Node (runs on client - displays the control interface)
     robot_gui_node = Node(
         package='robot_vila_system',
@@ -91,6 +77,5 @@ def generate_launch_description():
         LogInfo(msg='📝 Complete client system with GUI and VILA processing'),
         
         vila_server_node,
-        vila_vision_node,
         robot_gui_node,
     ])

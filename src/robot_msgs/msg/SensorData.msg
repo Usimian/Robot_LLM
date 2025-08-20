@@ -1,10 +1,12 @@
-# Sensor data from robot
-string robot_id                    # Robot identifier
-float64 battery_voltage            # Battery voltage (V)
-float64 cpu_temp                   # Jetson CPU Temperature (°C)
-float64 distance_front             # Front distance sensor (m)
-float64 distance_left              # Left distance sensor (m)
-float64 distance_right             # Right distance sensor (m)
-float64 cpu_usage                  # CPU usage (%)
-string camera_status               # Camera status
-int64 timestamp_ns                 # Sensor reading timestamp
+# ROS2 message for robot sensor data
+# Replaces HTTP-based sensor communication
+
+string robot_id
+float64 battery_voltage
+float64 cpu_temp
+float64 distance_front
+float64 distance_left
+float64 distance_right
+float64 cpu_usage
+string camera_status
+int64 timestamp_ns
