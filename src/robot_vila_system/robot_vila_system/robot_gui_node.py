@@ -554,7 +554,7 @@ class RobotGUIROS2:
         self.root = root
         print("🔧 DEBUG: root set")
         print("🔧 DEBUG: About to set base_title")
-        self.base_title = "Robot Control Hub - ROS2 VILA Integration"
+        self.base_title = "Robot Nemotron Client"
         print("🔧 DEBUG: base_title set")
         # Skip title and geometry for now to avoid segmentation fault
         print("🔧 DEBUG: Tkinter title/geometry SKIPPED to avoid segfault")
@@ -689,7 +689,13 @@ class RobotGUIROS2:
         try:
             # Update VILA model state
             if hasattr(self, 'sensor_data') and self.sensor_data:
-                self.sensor_data['vila_model_state'] = self._get_vila_model_state()
+                vila_state = self._get_vila_model_state()
+                self.sensor_data['vila_model_state'] = vila_state
+                # Set VILA server status based on model state
+                if vila_state in ["Active", "Ready"]:
+                    self.sensor_data['vila_server_status'] = "Online"
+                else:
+                    self.sensor_data['vila_server_status'] = "Offline"
                 
                 # Update robot status based on current sensor data
                 self.sensor_data['robot_status'] = self._determine_robot_status(self.sensor_data)
@@ -752,9 +758,9 @@ class RobotGUIROS2:
                 if hasattr(self, 'vila_status_label'):
                     vila_state = self._get_vila_model_state()
                     if vila_state == "Active":
-                        self.vila_status_label.config(text="🟢 VILA Active", foreground="green")
+                        self.vila_status_label.config(text="🟢 VILA Online (Active)", foreground="green")
                     elif vila_state == "Ready":
-                        self.vila_status_label.config(text="🔄 VILA Ready", foreground="blue")
+                        self.vila_status_label.config(text="🔵 VILA Online", foreground="blue")
                     elif vila_state == "Starting":
                         self.vila_status_label.config(text="🟡 VILA Starting", foreground="orange")
                     elif vila_state == "Error":
@@ -770,9 +776,9 @@ class RobotGUIROS2:
                 if hasattr(self, 'vila_status_indicator'):
                     vila_state = self._get_vila_model_state()
                     if vila_state == "Active":
-                        self.vila_status_indicator.config(text="🟢 Active", foreground="green")
+                        self.vila_status_indicator.config(text="🟢 Online (Active)", foreground="green")
                     elif vila_state == "Ready":
-                        self.vila_status_indicator.config(text="🔄 Ready", foreground="blue")
+                        self.vila_status_indicator.config(text="🔵 Online", foreground="blue")
                     elif vila_state == "Starting":
                         self.vila_status_indicator.config(text="🟡 Starting", foreground="orange")
                     elif vila_state == "Error":
@@ -1235,26 +1241,23 @@ class RobotGUIROS2:
     def _get_vila_model_state(self):
         """Get current VILA model state"""
         try:
-            # First check if VILA server is actually running
-            vila_server_status = self._get_vila_server_status_from_gui()
-            if not vila_server_status.get('process_running', False):
-                return "Offline"
-            elif vila_server_status.get('status') == 'error':
-                return "Error"
-            elif vila_server_status.get('status') == 'starting':
-                return "Starting"
-            elif vila_server_status.get('status') != 'running':
-                return "Stopped"
-            
-            # Server is running, now check if we have recent VILA analysis (within last 30 seconds)
-            if hasattr(self.ros_node, 'last_vila_update') and self.ros_node.last_vila_update:
-                time_diff = time.time() - self.ros_node.last_vila_update
-                if time_diff < 30:
-                    return "Active"
+            # Check if VILA ROS2 service is available
+            if hasattr(self.ros_node, 'vila_analysis_client'):
+                # Check if the service is available (indicates VILA node is running)
+                if self.ros_node.vila_analysis_client.service_is_ready():
+                    # Service is available, now check if we have recent VILA analysis (within last 30 seconds)
+                    if hasattr(self.ros_node, 'last_vila_update') and self.ros_node.last_vila_update:
+                        time_diff = time.time() - self.ros_node.last_vila_update
+                        if time_diff < 30:
+                            return "Active"
+                        else:
+                            return "Ready"
+                    else:
+                        return "Ready"
                 else:
-                    return "Ready"
+                    return "Offline"
             else:
-                return "Ready"
+                return "Offline"
         except Exception:
             return "Unknown"
     

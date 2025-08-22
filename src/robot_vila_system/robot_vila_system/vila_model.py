@@ -204,98 +204,136 @@ class CosmosNemotronVLAModel:
     
     def load_model(self, model_path: str = None) -> bool:
         """
-        Load Cosmos Nemotron VLA model with enhanced capabilities
+        Load VILA1.5-3b model using VILA package directly
         
         Args:
-            model_path: Optional model path override
+            model_path: Optional model path override (will use VILA1.5-3b if not specified)
             
         Returns:
             bool: True if model loaded successfully, False otherwise
         """
         try:
             model_to_load = model_path or self.model_name
-            logger.info(f"🔄 Loading Cosmos Nemotron VLA model: {model_to_load}")
+            logger.info(f"🔄 Loading VILA1.5-3b model: {model_to_load}")
             
-            # Try modern Cosmos Nemotron loading with multiple fallback models
-            model_candidates = [
-                model_to_load,  # User specified or default
-                "microsoft/git-large-vqa",  # More suitable VQA model
-                "Salesforce/blip2-opt-2.7b",  # Another good vision-language model
-                "microsoft/DialoGPT-medium"  # Text-only fallback
-            ]
-            
-            for i, candidate_model in enumerate(model_candidates):
-                logger.info(f"🔄 Trying model {i+1}/{len(model_candidates)}: {candidate_model}")
-                if self._load_cosmos_nemotron_model(candidate_model):
-                    self.model_loaded = True
-                    self.server_ready = True  # Legacy compatibility
-                    logger.info("✅ Cosmos Nemotron VLA model loaded successfully")
-                    logger.info(f"   └── Model: {candidate_model}")
-                    logger.info(f"   └── Multi-modal sensor fusion: Enabled")
-                    logger.info(f"   └── Enhanced safety validation: Enabled")
-                    return True
-            
-            # Enhanced simulation mode for development (still provides full sensor fusion)
-            logger.info("⚠️ All model loading attempts failed, enabling enhanced simulation mode")
-            logger.info("📍 Note: Simulation mode still provides full multi-modal sensor fusion!")
-            return self._enable_simulation_mode()
+            # Use VILA package directly for loading VILA models
+            if self._load_vila_model_direct(model_to_load):
+                self.model_loaded = True
+                self.server_ready = True  # Legacy compatibility
+                logger.info("✅ VILA1.5-3b model loaded successfully")
+                logger.info(f"   └── Model: {model_to_load}")
+                logger.info(f"   └── Multi-modal sensor fusion: Enabled")
+                logger.info(f"   └── Enhanced safety validation: Enabled")
+                return True
+            else:
+                logger.error("❌ Failed to load VILA1.5-3b model")
+                return False
             
         except Exception as e:
-            logger.error(f"❌ Model loading error: {e}")
-            logger.info("🔄 Falling back to enhanced simulation mode")
-            return self._enable_simulation_mode()
+            logger.error(f"❌ VILA1.5-3b model loading error: {e}")
+            return False
     
-    def _load_cosmos_nemotron_model(self, model_name: str) -> bool:
-        """Load the actual Cosmos Nemotron model"""
+    def _load_vila_model_direct(self, model_name: str) -> bool:
+        """Load VILA model using VILA package directly"""
         try:
-            from transformers import AutoTokenizer, AutoModelForCausalLM, AutoProcessor
+            # Import VILA components
+            import sys
+            vila_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "VILA")
+            if vila_path not in sys.path:
+                sys.path.insert(0, vila_path)
             
-            logger.info("   └── Loading tokenizer...")
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
-                trust_remote_code=True
-            )
+            logger.info("   └── Loading VILA model using VILA package...")
             
-            if self.quantization and self.device == "cuda":
-                logger.info("   └── Loading with quantization for RTX 3090...")
-                from transformers import BitsAndBytesConfig
+            # Import VILA model components
+            from llava.model.builder import load_pretrained_model
+            from llava.mm_utils import get_model_name_from_path
+            from llava.constants import DEFAULT_IMAGE_TOKEN
+            from llava.conversation import conv_templates, SeparatorStyle
+            
+            # Get model name and load
+            model_name_clean = get_model_name_from_path(model_name)
+            logger.info(f"   └── Model name resolved: {model_name_clean}")
+            
+            # Load VILA model components
+            logger.info("   └── Loading VILA tokenizer, model, image processor, and context length...")
+            # Load with or without quantization based on device
+            load_kwargs = {
+                "model_path": model_name,
+                "model_base": None,
+                "model_name": model_name_clean,
+                "device_map": "auto" if self.device == "cuda" else None,
+                "torch_dtype": torch.float16 if self.device == "cuda" else torch.float32,
+            }
+            
+            # Disable quantization for now to get VILA1.5-3b loading successfully
+            # TODO: Re-enable quantization once basic loading works
+            logger.info("   └── Loading without quantization (quantization disabled for compatibility)...")
+            load_kwargs["load_8bit"] = False
+            load_kwargs["load_4bit"] = False
+            
+            # Patch VILA's infer_stop_tokens to handle missing chat templates  
+            logger.info("   └── Patching VILA for chat template compatibility...")
+            
+            # Import and patch the tokenizer utility function
+            from llava.utils.tokenizer import infer_stop_tokens as original_infer_stop_tokens
+            
+            def safe_infer_stop_tokens(tokenizer):
+                # Set a default chat template if none exists
+                if not hasattr(tokenizer, 'chat_template') or tokenizer.chat_template is None:
+                    logger.info("   └── Setting default chat template for VILA tokenizer...")
+                    tokenizer.chat_template = "{% for message in messages %}{% if message['role'] == 'user' %}{{ '<|user|>\n' + message['content'] + '\n' }}{% elif message['role'] == 'assistant' %}{{ '<|assistant|>\n' + message['content'] + '\n' }}{% elif message['role'] == 'system' %}{{ '<|system|>\n' + message['content'] + '\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|assistant|>\n' }}{% endif %}"
                 
-                quantization_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_use_double_quant=True,
-                )
-                
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    quantization_config=quantization_config,
-                    device_map="auto",
-                    trust_remote_code=True,
-                    torch_dtype=torch.float16
-                )
-            else:
-                logger.info("   └── Loading standard model...")
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    device_map="auto" if self.device == "cuda" else None,
-                    trust_remote_code=True
-                )
+                # Now call the original function
+                return original_infer_stop_tokens(tokenizer)
             
-            # Try to load vision processor
+            # Patch the module-level function
+            import llava.utils.tokenizer
+            llava.utils.tokenizer.infer_stop_tokens = safe_infer_stop_tokens
+            
+            # Also patch in the builder module since it imports directly  
+            import llava.model.language_model.builder as vila_builder
+            # Store original and patch the imported function in the builder module
+            original_builder_infer_stop_tokens = getattr(vila_builder, 'infer_stop_tokens', original_infer_stop_tokens)
+            vila_builder.infer_stop_tokens = safe_infer_stop_tokens
+            
             try:
-                self.processor = AutoProcessor.from_pretrained(
-                    model_name,
-                    trust_remote_code=True
-                )
-                logger.info("   └── Multi-modal processor loaded")
-            except:
-                logger.info("   └── Text-only mode (processor not available)")
+                self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(**load_kwargs)
+            finally:
+                # Restore original functions
+                llava.utils.tokenizer.infer_stop_tokens = original_infer_stop_tokens
+                vila_builder.infer_stop_tokens = original_builder_infer_stop_tokens
             
+            # Store VILA-specific constants (get dynamically from tokenizer)
+            self.default_image_token = DEFAULT_IMAGE_TOKEN
+            self.image_token_index = self.tokenizer.media_token_ids["image"] if hasattr(self.tokenizer, 'media_token_ids') else -200
+            
+            # VILA doesn't use start/end tokens the same way
+            self.default_im_start_token = ""
+            self.default_im_end_token = ""
+            
+            # Store conversation template
+            if "llama-2" in model_name_clean.lower():
+                self.conv_mode = "llava_llama_2"
+            elif "mistral" in model_name_clean.lower() or "mixtral" in model_name_clean.lower():
+                self.conv_mode = "mistral_instruct"
+            elif "v1.6-34b" in model_name_clean.lower():
+                self.conv_mode = "chatml_direct"
+            elif "v1" in model_name_clean.lower():
+                self.conv_mode = "llava_v1"
+            else:
+                self.conv_mode = "vicuna_v1"
+            
+            logger.info(f"   └── Using conversation mode: {self.conv_mode}")
+            logger.info("   └── VILA model loaded successfully with native VILA architecture")
+            
+            # Set correct model type after successful loading
+            self.model_type = "vila_1_5_3b"
             return True
             
         except Exception as e:
-            logger.error(f"Cosmos Nemotron loading failed: {e}")
+            logger.error(f"VILA model loading failed: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
     
     def _enable_simulation_mode(self) -> bool:
@@ -310,23 +348,10 @@ class CosmosNemotronVLAModel:
         self.server_ready = True
         self.model_type = "cosmos_nemotron_enhanced_simulation"
         
-        # Create enhanced mock components
-        class MockModel:
-            def __init__(self):
-                self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        class MockTokenizer:
-            @staticmethod
-            def decode(*args, **kwargs):
-                return "Enhanced Cosmos Nemotron VLA Simulation Response"
-        
-        self.model = MockModel()
-        self.tokenizer = MockTokenizer()
-        self.processor = None
-        
-        logger.info("✅ Enhanced simulation mode enabled - providing full VLA capabilities")
-        logger.info("   └── This simulation mode provides production-level sensor fusion!")
-        return True
+        # No simulation mode - force real VILA loading to see actual errors
+        logger.error("❌ Simulation mode disabled - VILA1.5-3b must load successfully")
+        logger.error("   └── Fix the real VILA loading issue instead of masking with simulation")
+        return False
     
     def generate_response(self, prompt: str, image: Image.Image) -> Dict[str, Any]:
         """
@@ -367,11 +392,8 @@ class CosmosNemotronVLAModel:
             # Build enhanced prompt with sensor context
             enhanced_prompt = self._build_sensor_fusion_prompt(sensor_data, prompt)
             
-            # Generate analysis
-            if self.model_type == "cosmos_nemotron_simulation":
-                analysis = self._simulate_vla_analysis(sensor_data, enhanced_prompt)
-            else:
-                analysis = self._generate_real_analysis(enhanced_prompt, sensor_data.camera_image)
+            # Generate analysis using real VILA model
+            analysis = self._generate_real_analysis(enhanced_prompt, sensor_data.camera_image)
             
             # Parse navigation command with enhanced safety
             nav_command = self._parse_enhanced_navigation(analysis, sensor_data)
@@ -627,89 +649,103 @@ SAFETY PRIORITY: When uncertain or obstacles detected, choose 'stop'."""
 
         return base_prompt + task_prompt
     
-    def _simulate_vla_analysis(self, sensor_data: SensorData, prompt: str) -> str:
-        """Simulate VLA analysis for development/testing"""
-        # Analyze sensor data for realistic simulation
-        front_dist = sensor_data.lidar_distances.get('distance_front', float('inf'))
-        left_dist = sensor_data.lidar_distances.get('distance_left', float('inf'))
-        right_dist = sensor_data.lidar_distances.get('distance_right', float('inf'))
-        
-        # Simulate intelligent decision making
-        if front_dist < 0.5:
-            if left_dist > right_dist and left_dist > 1.0:
-                action = "turn_left"
-                confidence = 0.8
-                reasoning = f"Front blocked ({front_dist:.1f}m), turning left (clearer path: {left_dist:.1f}m vs {right_dist:.1f}m)"
-            elif right_dist > 1.0:
-                action = "turn_right" 
-                confidence = 0.8
-                reasoning = f"Front blocked ({front_dist:.1f}m), turning right (path: {right_dist:.1f}m)"
-            else:
-                action = "stop"
-                confidence = 0.95
-                reasoning = f"All paths blocked - Front: {front_dist:.1f}m, Left: {left_dist:.1f}m, Right: {right_dist:.1f}m"
-        elif front_dist > 2.0:
-            action = "move_forward"
-            confidence = 0.9
-            reasoning = f"Clear path ahead ({front_dist:.1f}m), safe to proceed forward"
-        else:
-            action = "move_forward"
-            confidence = 0.7
-            reasoning = f"Cautious forward movement - front distance: {front_dist:.1f}m"
-        
-        return f"""🤖 Cosmos Nemotron VLA Analysis (Simulation Mode):
-
-Multi-modal sensor fusion analysis:
-- LiDAR: Front={front_dist:.1f}m, Left={left_dist:.1f}m, Right={right_dist:.1f}m
-- IMU: Motion data integrated
-- Camera: Visual context considered
-
-Action: {action}
-Confidence: {confidence}
-Reasoning: {reasoning}
-
-Enhanced safety validation: PASSED"""
+    # Simulation method removed - using only real VILA1.5-3b inference
     
     def _generate_real_analysis(self, prompt: str, image: Image.Image = None) -> str:
-        """Generate real analysis using loaded model"""
+        """Generate real analysis using VILA model"""
         if not self.model or not self.tokenizer:
-            return self._simulate_vla_analysis(SensorData({}, {}), prompt)
+            raise RuntimeError("VILA model not loaded - cannot perform analysis")
         
         try:
-            # Use the actual model for analysis
-            if self.processor and image:
-                # Multi-modal analysis
-                inputs = self.processor(
-                    text=prompt,
-                    images=image,
-                    return_tensors="pt"
-                ).to(self.model.device)
+            # Import VILA conversation utilities
+            from llava.conversation import conv_templates, SeparatorStyle
+            from llava.mm_utils import tokenizer_image_token
+            
+            # Create conversation
+            conv = conv_templates[self.conv_mode].copy()
+            conv.append_message(conv.roles[0], prompt)
+            conv.append_message(conv.roles[1], None)
+            prompt_text = conv.get_prompt()
+            
+            if image and hasattr(self, 'image_processor'):
+                # Multi-modal VILA inference
+                logger.info("   └── Running VILA multi-modal inference...")
+                
+                # Process image using VILA image processor
+                image_tensor = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                
+                # Tokenize with image token
+                if self.default_image_token in prompt_text:
+                    input_ids = tokenizer_image_token(prompt_text, self.tokenizer, return_tensors='pt')
+                else:
+                    # Add image token at beginning
+                    prompt_with_image = self.default_image_token + '\n' + prompt_text
+                    input_ids = tokenizer_image_token(prompt_with_image, self.tokenizer, return_tensors='pt')
+                
+                input_ids = input_ids.unsqueeze(0).to(self.model.device)
+                image_tensor = image_tensor.unsqueeze(0).to(dtype=self.model.dtype, device=self.model.device)
+                
+                # Generate with VILA (media format: Dict[str, List[torch.Tensor]])
+                media = {"image": [image_tensor.squeeze(0)]}  # Remove extra batch dimension for media format
+                media_config = {"image": {}}  # Basic media config for images
+                
+                logger.info("   └── Starting VILA generation with media...")
+                logger.info(f"   └── Input shape: {input_ids.shape}")
+                logger.info(f"   └── Image tensor shape: {image_tensor.shape}")
+                
+                with torch.inference_mode():
+                    output_ids = self.model.generate(
+                        input_ids,
+                        media=media,
+                        media_config=media_config,
+                        do_sample=True,
+                        temperature=0.1,
+                        max_new_tokens=64,  # Reduced for faster inference
+                        use_cache=True,
+                        pad_token_id=self.tokenizer.eos_token_id
+                    )
+                
+                logger.info("   └── VILA generation completed")
+                
+                # Decode response
+                outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
+                logger.info(f"   └── Raw VILA output: {outputs[:200]}...")
+                
+                # Extract new content (remove input prompt)
+                outputs = outputs.strip()
+                if conv.sep in outputs:
+                    outputs = outputs.split(conv.sep)[-1].strip()
+                
+                return outputs
+                
             else:
-                # Text-only analysis
-                inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-            
-            # Generate response
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    inputs.input_ids if hasattr(inputs, 'input_ids') else inputs['input_ids'],
-                    max_new_tokens=256,
-                    do_sample=True,
-                    temperature=0.1,
-                    pad_token_id=self.tokenizer.eos_token_id if hasattr(self.tokenizer, 'eos_token_id') else 0
-                )
-            
-            # Decode response
-            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
-            # Extract new content
-            if prompt in response:
-                response = response.split(prompt)[-1].strip()
-            
-            return response
+                # Text-only analysis (fallback)
+                logger.info("   └── Running text-only inference...")
+                inputs = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
+                
+                with torch.inference_mode():
+                    outputs = self.model.generate(
+                        **inputs,
+                        max_new_tokens=256,
+                        do_sample=True,
+                        temperature=0.1,
+                        pad_token_id=self.tokenizer.eos_token_id
+                    )
+                
+                response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+                
+                # Extract new content
+                if prompt_text in response:
+                    response = response.split(prompt_text)[-1].strip()
+                
+                return response
             
         except Exception as e:
-            logger.error(f"Real analysis error: {e}")
-            return f"Analysis error: {str(e)} - using simulation fallback"
+            logger.error(f"VILA analysis error: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            # Re-raise the exception instead of masking it with simulation
+            raise RuntimeError(f"VILA inference failed: {str(e)}")
     
     def _parse_enhanced_navigation(self, analysis: str, sensor_data: SensorData) -> Dict[str, Any]:
         """Parse analysis with enhanced safety validation"""
