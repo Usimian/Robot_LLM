@@ -335,7 +335,7 @@ class RobotVILAServerROS2(Node):
             from PIL import Image as PILImage
             import cv2
             
-            # Create pure visual analysis prompt (LiDAR handled separately for late fusion)
+            # Create visual analysis prompt (Cosmos Nemotron VLA integrates all sensors)
             if not prompt:
                 prompt = """You are a robot's vision-language navigation system. Focus ONLY on visual analysis of the camera image:
 
@@ -349,7 +349,7 @@ class RobotVILAServerROS2(Node):
 Action: [move_forward/turn_left/turn_right/stop]
 Reason: [Brief explanation based purely on visual analysis]
 
-Focus on visual semantics - spatial safety will be handled by separate LiDAR systems."""
+Note: This is legacy fallback - main Cosmos Nemotron VLA handles full sensor fusion."""
             else:
                 # User provided custom prompt - keep it pure visual, no LiDAR integration
                 prompt = f"""🔍 VISUAL ANALYSIS: {prompt}
@@ -358,7 +358,7 @@ Focus on visual analysis only. Provide:
 Action: [move_forward/turn_left/turn_right/stop]
 Reason: [Brief visual-based explanation]
 
-Spatial safety constraints will be handled separately."""
+Legacy fallback mode - Cosmos Nemotron VLA provides integrated analysis."""
             
             # Check if image has valid data and encoding
             if not image_msg.data:
@@ -629,9 +629,47 @@ Spatial safety constraints will be handled separately."""
                 'distance_right': request.distance_right
             }
             
-            # Process with VILA using the client-provided image and LiDAR data
-            analysis_result = self._process_image_with_vila_sync(image_to_analyze, request.prompt, lidar_data)
-            nav_commands = self._parse_navigation_commands(analysis_result, lidar_data)
+            # Convert to SensorData for enhanced Cosmos Nemotron VLA analysis
+            from robot_vila_system.vila_model import SensorData
+            from cv_bridge import CvBridge
+            from PIL import Image as PILImage
+            import cv2
+            
+            # Convert ROS image to PIL for Cosmos Nemotron VLA
+            bridge = CvBridge()
+            encoding = image_to_analyze.encoding if image_to_analyze.encoding else "bgr8"
+            cv_image = bridge.imgmsg_to_cv2(image_to_analyze, encoding)
+            rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
+            pil_image = PILImage.fromarray(rgb_image)
+            
+            # Create SensorData with all available sensor information
+            sensor_data = SensorData(
+                lidar_distances=lidar_data,
+                imu_data=self.latest_imu_data or {
+                    'acceleration': {'x': 0, 'y': 0, 'z': 9.8},
+                    'gyroscope': {'x': 0, 'y': 0, 'z': 0}
+                },
+                camera_image=pil_image,
+                timestamp=time.time()
+            )
+            
+            # Use enhanced Cosmos Nemotron VLA analysis
+            self.get_logger().info("🚀 Using Cosmos Nemotron VLA multi-modal analysis")
+            cosmos_result = self.vila_model.analyze_multi_modal_scene(sensor_data, request.prompt)
+            
+            if cosmos_result['success']:
+                analysis_result = cosmos_result['analysis']
+                nav_commands = {
+                    'action': cosmos_result['navigation_command'],
+                    'confidence': cosmos_result['confidence'],
+                    'reasoning': cosmos_result['reasoning']
+                }
+                self.get_logger().info(f"✅ Cosmos Nemotron VLA result: {nav_commands['action']} (confidence: {nav_commands['confidence']:.2f})")
+            else:
+                # Fallback to old method if Cosmos analysis fails
+                self.get_logger().warning("⚠️ Cosmos analysis failed, falling back to legacy method")
+                analysis_result = self._process_image_with_vila_sync(image_to_analyze, request.prompt, lidar_data)
+                nav_commands = self._parse_navigation_commands(analysis_result, lidar_data)
             
             # Fill service response directly
             response.success = True

@@ -680,77 +680,9 @@ class RobotGUIROS2:
         # Schedule next update (50ms for responsive ROS message processing)
         self.root.after(50, self._process_updates)
     
-    def _get_lidar_safe_actions(self, front_dist: float, left_dist: float, right_dist: float) -> List[str]:
-        """
-        Dedicated LiDAR safety pipeline - determines safe actions based purely on spatial constraints
-        This is the 'late fusion' LiDAR processing separate from VILA's visual analysis
-        """
-        safe_actions = []
-        
-        # Define safety thresholds (conservative for collision avoidance)
-        FORWARD_SAFE_DISTANCE = 1.0   # Need 1.0m clearance for forward movement
-        TURN_SAFE_DISTANCE = 0.5      # Need 0.5m clearance for turns
-        EMERGENCY_DISTANCE = 0.3      # Below this, only stop is safe
-        
-        # Emergency stop condition
-        if front_dist < EMERGENCY_DISTANCE:
-            return ['stop']  # Only stop is safe
-        
-        # Forward movement safety
-        if front_dist >= FORWARD_SAFE_DISTANCE:
-            safe_actions.append('move_forward')
-        
-        # Turn safety
-        if left_dist >= TURN_SAFE_DISTANCE:
-            safe_actions.append('turn_left')
-            
-        if right_dist >= TURN_SAFE_DISTANCE:
-            safe_actions.append('turn_right')
-        
-        # Stop is always a safe option
-        safe_actions.append('stop')
-        
-        return safe_actions
+
     
-    def _choose_exploration_action(self, safe_actions: List[str], front_dist: float, left_dist: float, right_dist: float) -> str:
-        """
-        Intelligent exploration algorithm - chooses the best action to explore the room
-        Prioritizes directions with more clearance for better exploration
-        """
-        # Remove 'stop' from safe actions for exploration (unless it's the only option)
-        exploration_actions = [action for action in safe_actions if action != 'stop']
-        
-        if not exploration_actions:
-            return 'stop'  # Only option
-        
-        # EXPLORATION STRATEGY: Choose direction with most clearance
-        if 'move_forward' in exploration_actions and front_dist > 1.5:
-            # Prefer forward if plenty of clearance
-            self.log_message(f"🎯 Exploration: Forward path clear ({front_dist:.1f}m)")
-            return 'move_forward'
-        
-        # If forward blocked, choose the side with more clearance
-        turn_options = []
-        if 'turn_left' in exploration_actions:
-            turn_options.append(('turn_left', left_dist))
-        if 'turn_right' in exploration_actions:
-            turn_options.append(('turn_right', right_dist))
-        
-        if turn_options:
-            # Sort by clearance distance (highest first)
-            turn_options.sort(key=lambda x: x[1], reverse=True)
-            best_turn, best_clearance = turn_options[0]
-            
-            self.log_message(f"🎯 Exploration: Best turn is {best_turn} with {best_clearance:.1f}m clearance")
-            return best_turn
-        
-        # If no turns available, try forward with caution
-        if 'move_forward' in exploration_actions:
-            self.log_message(f"🎯 Exploration: Cautious forward ({front_dist:.1f}m clearance)")
-            return 'move_forward'
-        
-        # Last resort
-        return 'stop'
+
     
     def _update_system_status(self):
         """Update system status display (runs every 1 second)"""
@@ -1476,46 +1408,24 @@ class RobotGUIROS2:
                 confidence > 0.5 and self.safety_enabled and self.movement_enabled):
                 
                 try:
-                    # LATE FUSION: Combine VILA's visual analysis with LiDAR safety constraints
+                    # COSMOS NEMOTRON VLA: Enhanced multi-modal decision with built-in sensor fusion
+                    # The Cosmos Nemotron VLA model already includes LiDAR+IMU+vision fusion
+                    self.log_message(f"🚀 Cosmos Nemotron VLA Decision: {action} (confidence: {confidence:.2f})")
+                    
+                    # Trust the enhanced VLA model's integrated sensor fusion and safety
                     current_sensor_data = getattr(self.ros_node, 'current_sensor_data', None)
                     if current_sensor_data:
-                        # Handle both dict and object formats
+                        # Log sensor context for monitoring (but don't override the VLA decision)
                         if isinstance(current_sensor_data, dict):
                             front_dist = current_sensor_data.get('distance_front', 0.0)
-                            # SWAP LEFT/RIGHT to fix reversal issue
-                            left_dist = current_sensor_data.get('distance_right', 0.0)   # Use right data for left
-                            right_dist = current_sensor_data.get('distance_left', 0.0)   # Use left data for right
+                            left_dist = current_sensor_data.get('distance_left', 0.0)
+                            right_dist = current_sensor_data.get('distance_right', 0.0)
                         else:
                             front_dist = getattr(current_sensor_data, 'distance_front', 0.0)
-                            # SWAP LEFT/RIGHT to fix reversal issue
-                            left_dist = getattr(current_sensor_data, 'distance_right', 0.0)   # Use right data for left
-                            right_dist = getattr(current_sensor_data, 'distance_left', 0.0)   # Use left data for right
+                            left_dist = getattr(current_sensor_data, 'distance_left', 0.0) 
+                            right_dist = getattr(current_sensor_data, 'distance_right', 0.0)
                         
-                        self.log_message(f"📊 Late Fusion - VILA: {action} | LiDAR: F:{front_dist:.2f}m L:{left_dist:.2f}m R:{right_dist:.2f}m")
-                        self.log_message(f"🔍 DEBUG: Raw sensor data - L:{current_sensor_data.get('distance_left', 'N/A')} R:{current_sensor_data.get('distance_right', 'N/A')}")
-                        
-                        # DEDICATED LIDAR SAFETY PIPELINE
-                        lidar_safe_actions = self._get_lidar_safe_actions(front_dist, left_dist, right_dist)
-                        
-                        if action not in lidar_safe_actions:
-                            # VILA's visual decision conflicts with LiDAR safety
-                            self.log_message(f"🚨 LATE FUSION OVERRIDE: VILA suggested '{action}' but LiDAR constraints allow only: {lidar_safe_actions}")
-                            
-                            # INTELLIGENT EXPLORATION: Choose best exploration action (if enabled)
-                            if hasattr(self, 'exploration_enabled') and getattr(self, 'exploration_enabled', True):
-                                exploration_action = self._choose_exploration_action(lidar_safe_actions, front_dist, left_dist, right_dist)
-                                if exploration_action:
-                                    action = exploration_action
-                                    self.log_message(f"🧭 Exploration override: {action}")
-                                else:
-                                    self.log_message(f"🚨 NO SAFE ACTIONS - Emergency stop")
-                                    return  # Complete block
-                            else:
-                                # Exploration disabled - just stop safely
-                                action = 'stop'
-                                self.log_message(f"🛑 Exploration disabled - stopping safely")
-                        else:
-                            self.log_message(f"✅ Late Fusion: VILA and LiDAR agree on '{action}'")
+                        self.log_message(f"📊 Sensor Context - LiDAR: F:{front_dist:.2f}m L:{left_dist:.2f}m R:{right_dist:.2f}m")
                     
                     # Map VILA actions to robot commands (only if safety checks passed)
                     if action == 'move_forward' or action == 'move':

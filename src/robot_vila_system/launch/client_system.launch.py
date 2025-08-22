@@ -36,8 +36,8 @@ def generate_launch_description():
     
     vila_server_enabled_arg = DeclareLaunchArgument(
         'vila_server',
-        default_value='true',
-        description='Enable VILA server auto-start'
+        default_value='false',  # Disable old HTTP server - using integrated Cosmos Nemotron VLA
+        description='Enable VILA server auto-start (deprecated - using integrated Cosmos Nemotron VLA)'
     )
     
     # Get launch configurations
@@ -102,7 +102,7 @@ def generate_launch_description():
         LogInfo(msg=['GUI Enabled: ', gui_enabled]),
         LogInfo(msg=['VILA Server Enabled: ', vila_server_enabled]),
         LogInfo(msg=['VILA Server Script: ', vila_server_script]),
-        LogInfo(msg='📝 Complete client system with GUI, VILA processing, and auto VILA server'),
+        LogInfo(msg='📝 Complete client system with GUI and integrated Cosmos Nemotron VLA'),
         
         vila_server_process,
         vila_server_node,
