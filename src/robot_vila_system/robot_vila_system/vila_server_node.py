@@ -266,6 +266,8 @@ class RobotVILAServerROS2(Node):
                 if success:
                     self.model_loaded = True
                     self.get_logger().info("✅ VILA model loaded successfully")
+                    # Publish updated status immediately after model loads
+                    self._publish_vila_status()
                     return
                 else:
                     self.get_logger().warn(f"⚠️ VILA model load attempt {attempt + 1}/3 failed")
@@ -583,7 +585,7 @@ Legacy fallback mode - Cosmos Nemotron VLA provides integrated analysis."""
             response.result_message = f"Command {command.command_type} queued for execution"
             
             self.get_logger().info(f"✅ COMMAND QUEUED: {command.command_type} for {command.robot_id} (ID: {request_id})")
-            self.get_logger().info(f"🔍 RESPONSE SENT: success=True, message='{response.result_message}' (ID: {request_id})")
+            self.get_logger().debug(f"🔍 RESPONSE SENT: success=True, message='{response.result_message}' (ID: {request_id})")
             
         except Exception as e:
             self.get_logger().error(f"❌ Command execution error: {e}")
@@ -595,14 +597,24 @@ Legacy fallback mode - Cosmos Nemotron VLA provides integrated analysis."""
     def _vila_analysis_service(self, request, response):
         """Handle VILA analysis requests - on-demand resource-based processing"""
         try:
+            # Check if model is loaded, if not try to load it on-demand
             if not self.model_loaded:
-                response.success = False
-                response.error_message = "VILA model not loaded"
-                response.analysis_result = ""
-                response.navigation_commands_json = "{}"
-                response.confidence = 0.0
-                response.timestamp_ns = self.get_clock().now().nanoseconds
-                return response
+                self.get_logger().info("🔄 VILA model not loaded yet, attempting on-demand loading...")
+                success = self.vila_model.load_model()
+                if success:
+                    self.model_loaded = True
+                    self.get_logger().info("✅ VILA model loaded successfully on-demand")
+                    # Publish updated status immediately after on-demand loading
+                    self._publish_vila_status()
+                else:
+                    self.get_logger().error("❌ Failed to load VILA model on-demand")
+                    response.success = False
+                    response.error_message = "VILA model failed to load"
+                    response.analysis_result = ""
+                    response.navigation_commands_json = "{}"
+                    response.confidence = 0.0
+                    response.timestamp_ns = self.get_clock().now().nanoseconds
+                    return response
             
             # Client must provide an image - no stored images in server
             if not request.image.data:
@@ -614,10 +626,13 @@ Legacy fallback mode - Cosmos Nemotron VLA provides integrated analysis."""
                 response.timestamp_ns = self.get_clock().now().nanoseconds
                 return response
             
-            self.get_logger().info(f"🔍 On-demand VILA analysis requested for {request.robot_id}")
-            self.get_logger().info(f"   └── Prompt: {request.prompt}")
-            self.get_logger().info(f"   └── Image: {request.image.width}x{request.image.height}, encoding: {request.image.encoding}")
-            self.get_logger().info(f"   └── LiDAR: Front={request.distance_front:.2f}m, Left={request.distance_left:.2f}m, Right={request.distance_right:.2f}m")
+            # Move detailed request info to debug level
+            self.get_logger().debug(f"🔍 On-demand VILA analysis requested for {request.robot_id}")
+            self.get_logger().debug(f"   └── Prompt: {request.prompt}")
+            self.get_logger().debug(f"   └── Image: {request.image.width}x{request.image.height}, encoding: {request.image.encoding}")
+            self.get_logger().debug(f"   └── LiDAR: Front={request.distance_front:.2f}m, Left={request.distance_left:.2f}m, Right={request.distance_right:.2f}m")
+            # Keep a simple info message for important operations
+            self.get_logger().info(f"🔍 VILA analysis: {request.prompt[:40]}...")
             
             # Use the image provided by the client
             image_to_analyze = request.image
@@ -713,7 +728,7 @@ Legacy fallback mode - Cosmos Nemotron VLA provides integrated analysis."""
     
     def _validate_command_safety(self, command: RobotCommand) -> bool:
         """Validate command against safety constraints including LiDAR distances"""
-        self.get_logger().info(f"🔍 SAFETY CHECK: command={command.command_type}, safety_enabled={self.safety_enabled}, robot_status={self.robot_info.status}")
+        self.get_logger().debug(f"🔍 SAFETY CHECK: command={command.command_type}, safety_enabled={self.safety_enabled}, robot_status={self.robot_info.status}")
         
         # Check if safety is enabled
         if not self.safety_enabled:

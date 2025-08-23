@@ -435,7 +435,7 @@ class RobotGUIROS2Node(Node):
         """Request VILA analysis - always sends current camera image to VILA server"""
         try:
             # Check service availability with longer timeout
-            self.get_logger().info("🔍 Checking VILA analysis service availability...")
+            self.get_logger().debug("🔍 Checking VILA analysis service availability...")
             if not self.vila_analysis_client.wait_for_service(timeout_sec=5.0):
                 self.get_logger().error("VILA analysis service not available after 5 seconds")
                 self.get_logger().error("Make sure the VILA server node is running")
@@ -469,7 +469,7 @@ class RobotGUIROS2Node(Node):
                 request.distance_front = self.current_sensor_data.get('distance_front', 2.0)  # Default 2m if no data
                 request.distance_left = self.current_sensor_data.get('distance_left', 2.0)
                 request.distance_right = self.current_sensor_data.get('distance_right', 2.0)
-                self.get_logger().info(f"🔍 Including LiDAR data: F={request.distance_front:.2f}m, L={request.distance_left:.2f}m, R={request.distance_right:.2f}m")
+                self.get_logger().debug(f"🔍 Including LiDAR data: F={request.distance_front:.2f}m, L={request.distance_left:.2f}m, R={request.distance_right:.2f}m")
             else:
                 # Default distances if no sensor data available
                 request.distance_front = 2.0
@@ -478,7 +478,7 @@ class RobotGUIROS2Node(Node):
                 self.get_logger().warn("⚠️ No sensor data available, using default distances for VILA analysis")
             request.image = image_to_send
             
-            self.get_logger().info(f"🔍 Sending VILA analysis request with image: {image_to_send.width}x{image_to_send.height}")
+            self.get_logger().debug(f"🔍 Sending VILA analysis request with image: {image_to_send.width}x{image_to_send.height}")
             
             future = self.vila_analysis_client.call_async(request)
             future.add_done_callback(self._vila_analysis_response_callback)
@@ -626,9 +626,10 @@ class RobotGUIROS2:
         # Start system status updates (every 1 second)
         self._update_system_status()
 
-        self.log_message("🤖 Robot GUI ROS2 initialized")
-        self.log_message("   └── All communication via ROS2 topics and services")
-        self.log_message("   └── Single command gateway maintained [[memory:5366669]]")
+        # Move initialization messages to debug logger
+        logger.debug("🤖 Robot GUI ROS2 initialized")
+        logger.debug("   └── All communication via ROS2 topics and services")
+        logger.debug("   └── Single command gateway maintained [[memory:5366669]]")
 
         # VILA server managed manually - start simple_vila_server.py separately
         self.vila_model = None
@@ -654,7 +655,7 @@ class RobotGUIROS2:
         try:
             self.ros_thread = threading.Thread(target=self._spin_ros, daemon=True)
             self.ros_thread.start()
-            self.log_message("🔄 ROS2 background thread started")
+            logger.debug("🔄 ROS2 background thread started")
         except Exception as e:
             logger.error(f"Failed to start ROS2 thread: {e}")
     
@@ -749,46 +750,22 @@ class RobotGUIROS2:
                 # Update Robot status based on battery voltage
                 if hasattr(self, 'ros_status_label') and 'battery_voltage' in self.sensor_data:
                     battery_voltage = self.sensor_data['battery_voltage']
+                    # Create composite status display with label in black and status in color
                     if battery_voltage > 8.0:
-                        self.ros_status_label.config(text="🟢 Robot: Online", foreground="green")
+                        self._update_composite_status(self.ros_status_label, "Robot:", "Online", "green")
                     else:
-                        self.ros_status_label.config(text="🔴 Robot: Offline", foreground="red")
+                        self._update_composite_status(self.ros_status_label, "Robot:", "Offline", "red")
                 
                 # Update VILA status
+                # Update VILA status in System Status (moved from VILA Analysis frame)
                 if hasattr(self, 'vila_status_label'):
                     vila_state = self._get_vila_model_state()
-                    if vila_state == "Active":
-                        self.vila_status_label.config(text="🟢 VILA Online (Active)", foreground="green")
-                    elif vila_state == "Ready":
-                        self.vila_status_label.config(text="🔵 VILA Online", foreground="blue")
-                    elif vila_state == "Starting":
-                        self.vila_status_label.config(text="🟡 VILA Starting", foreground="orange")
-                    elif vila_state == "Error":
-                        self.vila_status_label.config(text="❌ VILA Error", foreground="red")
-                    elif vila_state == "Offline":
-                        self.vila_status_label.config(text="⚫ VILA Offline", foreground="gray")
-                    elif vila_state == "Stopped":
-                        self.vila_status_label.config(text="🔴 VILA Stopped", foreground="red")
+                    if vila_state in ["Active", "Ready"]:
+                        self._update_composite_status(self.vila_status_label, "VILA:", "Online", "green")
+                        self._set_vila_frame_enabled(True)
                     else:
-                        self.vila_status_label.config(text="❓ VILA Unknown", foreground="gray")
-                
-                # Update VILA Analysis tab status indicator as well
-                if hasattr(self, 'vila_status_indicator'):
-                    vila_state = self._get_vila_model_state()
-                    if vila_state == "Active":
-                        self.vila_status_indicator.config(text="🟢 Online (Active)", foreground="green")
-                    elif vila_state == "Ready":
-                        self.vila_status_indicator.config(text="🔵 Online", foreground="blue")
-                    elif vila_state == "Starting":
-                        self.vila_status_indicator.config(text="🟡 Starting", foreground="orange")
-                    elif vila_state == "Error":
-                        self.vila_status_indicator.config(text="❌ Error", foreground="red")
-                    elif vila_state == "Offline":
-                        self.vila_status_indicator.config(text="⚫ Offline", foreground="gray")
-                    elif vila_state == "Stopped":
-                        self.vila_status_indicator.config(text="🔴 Stopped", foreground="red")
-                    else:
-                        self.vila_status_indicator.config(text="❓ Unknown", foreground="gray")
+                        self._update_composite_status(self.vila_status_label, "VILA:", "Offline", "red")
+                        self._set_vila_frame_enabled(False)
                         
         except Exception as e:
             logger.error(f"Error updating system status: {e}")
@@ -841,7 +818,7 @@ class RobotGUIROS2:
             main_frame = ttk.Frame(self.root)
             main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
             
-            # Top section: System Status
+            # Top section: System Status (resizable)
             print("🔧 DEBUG: Creating system status section...")
             status_frame = ttk.LabelFrame(main_frame, text="🖥️ System Status", padding=10)
             status_frame.pack(fill=tk.X, pady=(0, 10))
@@ -851,29 +828,41 @@ class RobotGUIROS2:
             middle_frame = ttk.Frame(main_frame)
             middle_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
             
-            # Left column: Movement Controls
+            # Left column: Movement Controls (half width, fixed size)
             print("🔧 DEBUG: Creating movement controls section...")
             movement_frame = ttk.LabelFrame(middle_frame, text="🎮 Movement Controls", padding=10)
             movement_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
+            movement_frame.pack_propagate(False)  # Prevent frame from shrinking
+            movement_frame.configure(width=200)  # 10% wider than 180 (180 * 1.1 = 198, rounded to 200)
             self._create_movement_section(movement_frame)
             
-            # Center column: Camera Feed
+            # Center column: Camera Feed (fixed width for native camera size)
             print("🔧 DEBUG: Creating camera section...")
             camera_frame = ttk.LabelFrame(middle_frame, text="📹 Camera Feed", padding=10)
-            camera_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+            camera_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5)
+            camera_frame.pack_propagate(False)  # Prevent frame from changing size
+            # Size for 640x480 camera + controls (with padding)
+            camera_frame.configure(width=440, height=400)  # Native camera size + padding
             self._create_camera_section(camera_frame)
             
-            # Right column: VILA Analysis
+            # Right column: VILA Analysis (resizable)
             print("🔧 DEBUG: Creating VILA section...")
             vila_frame = ttk.LabelFrame(middle_frame, text="🤖 VILA Analysis", padding=10)
-            vila_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
+            vila_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
             self._create_vila_section(vila_frame)
             
-            # Bottom section: Activity Log
+            # Bottom section: Activity Log (resizable)
             print("🔧 DEBUG: Creating activity log section...")
             log_frame = ttk.LabelFrame(main_frame, text="📋 Activity Log", padding=10)
             log_frame.pack(fill=tk.BOTH, expand=True)
             self._create_log_section(log_frame)
+            
+            # Now that GUI is created, safely set the window title
+            try:
+                self.root.title(self.base_title)
+                print(f"🔧 DEBUG: Window title set to: {self.base_title}")
+            except Exception as e:
+                print(f"🔧 DEBUG: Failed to set window title: {e}")
             
             print("🔧 DEBUG: Single-page GUI created successfully")
             
@@ -890,19 +879,17 @@ class RobotGUIROS2:
         
         # System status displays
         self.sensor_labels = {}
+        # Reorganized sensor names for cleaner display (removed redundant status items)
         sensor_names = [
-            ("Robot Status", "robot_status", ""),
-            ("Battery Voltage", "battery_voltage", "V"),
+            ("Battery", "battery_voltage", "V"),
             ("CPU Temp", "cpu_temp", "°C"),
             ("CPU Usage", "cpu_usage", "%"),
-            ("Distance Front", "distance_front", "m"),
-            ("Distance Left", "distance_left", "m"),
-            ("Distance Right", "distance_right", "m"),
-            ("IMU Accel X", "imu_accel_x", "m/s²"),
-            ("IMU Accel Y", "imu_accel_y", "m/s²"),
-            ("IMU Accel Z", "imu_accel_z", "m/s²"),
-            ("VILA Server", "vila_server_status", ""),
-            ("VILA Model", "vila_model_state", "")
+            ("LiDAR F", "distance_front", "m"),
+            ("LiDAR L", "distance_left", "m"),
+            ("LiDAR R", "distance_right", "m"),
+            ("IMU X", "imu_accel_x", "m/s²"),
+            ("IMU Y", "imu_accel_y", "m/s²"),
+            ("IMU Z", "imu_accel_z", "m/s²")
         ]
         
         for i, (name, key, unit) in enumerate(sensor_names):
@@ -916,20 +903,25 @@ class RobotGUIROS2:
             self.sensor_labels[key] = (value_label, unit)
     
     def _create_control_tab(self):
-        """Create robot control tab"""
+        """Create robot control tab - UNUSED: Legacy tabbed interface code"""
         # Robot info frame
         info_frame = ttk.LabelFrame(self.control_frame, text="Robot Information", padding=10)
         info_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        # Robot ID
-        ttk.Label(info_frame, text="Robot ID:").grid(row=0, column=0, sticky=tk.W)
-        self.robot_id_label = ttk.Label(info_frame, text=self.robot_id, font=("Arial", 10, "bold"))
-        self.robot_id_label.grid(row=0, column=1, sticky=tk.W, padx=10)
+        # Remove Robot ID display as requested
         
         # Connection status
         ttk.Label(info_frame, text="Connection:").grid(row=0, column=2, sticky=tk.W, padx=(20, 0))
-        self.connection_label = ttk.Label(info_frame, text="Robot: Checking...", foreground="orange")
-        self.connection_label.grid(row=0, column=3, sticky=tk.W, padx=10)
+        # Create composite connection status frame
+        conn_frame = ttk.Frame(info_frame)
+        conn_frame.grid(row=0, column=3, sticky=tk.W, padx=10)
+        
+        # Create composite status with black label and colored status
+        conn_prefix = ttk.Label(conn_frame, text="Robot:", foreground="black")
+        conn_prefix.pack(side=tk.LEFT)
+        
+        self.connection_label = ttk.Label(conn_frame, text="Offline", foreground="red", font=("Arial", 9, "bold"))
+        self.connection_label.pack(side=tk.LEFT, padx=(5, 0))
         
         # Movement controls frame
         movement_frame = ttk.LabelFrame(self.control_frame, text="Movement Controls", padding=10)
@@ -949,24 +941,24 @@ class RobotGUIROS2:
         button_frame = ttk.Frame(movement_frame)
         button_frame.pack(pady=10)
         
-        # Forward button
-        ttk.Button(button_frame, text="↑ Forward", 
-                  command=lambda: self._send_movement_command("move_forward")).grid(row=0, column=1, padx=5, pady=5)
+        # Forward button (ultra compact)
+        ttk.Button(button_frame, text="↑", width=3,
+                  command=lambda: self._send_movement_command("move_forward")).grid(row=0, column=1, padx=1, pady=1)
         
-        # Left and right buttons
-        ttk.Button(button_frame, text="← Left", 
-                  command=lambda: self._send_movement_command("turn_left")).grid(row=1, column=0, padx=5, pady=5)
-        ttk.Button(button_frame, text="→ Right", 
-                  command=lambda: self._send_movement_command("turn_right")).grid(row=1, column=2, padx=5, pady=5)
+        # Left and right buttons (ultra compact)
+        ttk.Button(button_frame, text="←", width=3,
+                  command=lambda: self._send_movement_command("turn_left")).grid(row=1, column=0, padx=1, pady=1)
+        ttk.Button(button_frame, text="→", width=3,
+                  command=lambda: self._send_movement_command("turn_right")).grid(row=1, column=2, padx=1, pady=1)
         
-        # Backward button
-        ttk.Button(button_frame, text="↓ Backward", 
-                  command=lambda: self._send_movement_command("move_backward")).grid(row=2, column=1, padx=5, pady=5)
+        # Backward button (ultra compact)
+        ttk.Button(button_frame, text="↓", width=3,
+                  command=lambda: self._send_movement_command("move_backward")).grid(row=2, column=1, padx=1, pady=1)
         
-        # Stop button
-        stop_btn = ttk.Button(button_frame, text="⏹ STOP", 
+        # Stop button (ultra compact)
+        stop_btn = ttk.Button(button_frame, text="⏹", width=3,
                              command=lambda: self._send_movement_command("stop"))
-        stop_btn.grid(row=1, column=1, padx=5, pady=5)
+        stop_btn.grid(row=1, column=1, padx=1, pady=1)
         stop_btn.configure(style="Accent.TButton")
         
         # Emergency stop
@@ -983,7 +975,7 @@ class RobotGUIROS2:
     
 
     def _create_monitoring_tab(self):
-        """Create monitoring tab"""
+        """Create monitoring tab - UNUSED: Legacy tabbed interface code"""
         # Camera frame with controls
         camera_frame = ttk.LabelFrame(self.monitoring_frame, text="Camera Feed", padding=10)
         camera_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -1013,7 +1005,7 @@ class RobotGUIROS2:
         self.camera_label.pack(expand=True)
     
     def _create_vila_tab(self):
-        """Create VILA analysis tab"""
+        """Create VILA analysis tab - UNUSED: Legacy tabbed interface code"""
         # VILA controls frame
         controls_frame = ttk.LabelFrame(self.vila_frame, text="VILA Controls", padding=10)
         controls_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -1022,9 +1014,16 @@ class RobotGUIROS2:
         top_row = ttk.Frame(controls_frame)
         top_row.pack(fill=tk.X, pady=2)
         
-        # VILA resource status
-        self.vila_status_label = ttk.Label(top_row, text="⚫ VILA Checking...", foreground="gray")
-        self.vila_status_label.pack(side=tk.LEFT, padx=10)
+        # VILA resource status - create frame for composite status
+        vila_frame = ttk.Frame(top_row)
+        vila_frame.pack(side=tk.LEFT, padx=10)
+        
+        # Create composite status with black label and colored status
+        vila_label = ttk.Label(vila_frame, text="VILA:", foreground="black")
+        vila_label.pack(side=tk.LEFT)
+        
+        self.vila_status_label = ttk.Label(vila_frame, text="Offline", foreground="red")
+        self.vila_status_label.pack(side=tk.LEFT, padx=(5, 0))
         
         # Automatic analysis toggle button (avoiding BooleanVar due to segfault issues)
         self.vila_auto_button = ttk.Button(
@@ -1073,9 +1072,16 @@ class RobotGUIROS2:
         self.status_text = ttk.Label(self.status_bar, text="Ready - ROS2 Communication Active")
         self.status_text.pack(side=tk.LEFT, padx=10, pady=5)
         
-        # ROS2 status indicator
-        self.ros_status = ttk.Label(self.status_bar, text="🟢 ROS2", foreground="green")
-        self.ros_status.pack(side=tk.RIGHT, padx=10, pady=5)
+        # ROS2 status indicator - create frame for composite status
+        ros_frame = ttk.Frame(self.status_bar)
+        ros_frame.pack(side=tk.RIGHT, padx=10, pady=5)
+        
+        # Create composite status with black label and colored status
+        ros_label = ttk.Label(ros_frame, text="ROS2:", foreground="black")
+        ros_label.pack(side=tk.LEFT)
+        
+        self.ros_status = ttk.Label(ros_frame, text="Online", foreground="green")
+        self.ros_status.pack(side=tk.LEFT, padx=(5, 0))
     
     def _send_movement_command(self, command_type: str):
         """Send movement command through ROS2"""
@@ -1206,9 +1212,9 @@ class RobotGUIROS2:
         # Update connection status based on battery voltage
         battery_voltage = data.get('battery_voltage', 0)
         if battery_voltage > 8.0:
-            self.connection_label.config(text="Robot: Online", foreground="green")
+            self._update_composite_status(self.connection_label, "Robot:", "Online", "green")
         else:
-            self.connection_label.config(text="Robot: Offline", foreground="red")
+            self._update_composite_status(self.connection_label, "Robot:", "Offline", "red")
         
         # Update robot status in system status panel with more detailed info
         if 'robot_status' in self.sensor_labels:
@@ -1241,11 +1247,11 @@ class RobotGUIROS2:
     def _get_vila_model_state(self):
         """Get current VILA model state"""
         try:
-            # Check if VILA ROS2 service is available
-            if hasattr(self.ros_node, 'vila_analysis_client'):
-                # Check if the service is available (indicates VILA node is running)
-                if self.ros_node.vila_analysis_client.service_is_ready():
-                    # Service is available, now check if we have recent VILA analysis (within last 30 seconds)
+            # Check VILA server status from published status messages
+            if hasattr(self, 'vila_server_status') and self.vila_server_status:
+                # Check if model is loaded (server_ready indicates model loading completion)
+                if self.vila_server_status.get('server_ready', False):
+                    # Model is loaded, now check if we have recent VILA analysis (within last 30 seconds)
                     if hasattr(self.ros_node, 'last_vila_update') and self.ros_node.last_vila_update:
                         time_diff = time.time() - self.ros_node.last_vila_update
                         if time_diff < 30:
@@ -1255,8 +1261,10 @@ class RobotGUIROS2:
                     else:
                         return "Ready"
                 else:
-                    return "Offline"
+                    # VILA server is running but model not yet loaded
+                    return "Starting"
             else:
+                # No VILA status received yet or VILA node not running
                 return "Offline"
         except Exception:
             return "Unknown"
@@ -1480,6 +1488,13 @@ class RobotGUIROS2:
     def _update_vila_server_status(self, status_data: dict):
         """Update VILA server status display"""
         self.vila_server_status = status_data
+        
+        # Log for debugging
+        # Move technical status updates to debug logger
+        logger.debug(f"🔧 VILA server status updated: server_ready={status_data.get('server_ready', False)}")
+        
+        # Force immediate update of VILA status labels
+        self._force_vila_status_update()
 
         # Update the system status display (only if sensor_labels exists)
         if hasattr(self, 'sensor_labels') and 'vila_server_status' in self.sensor_labels:
@@ -1488,19 +1503,72 @@ class RobotGUIROS2:
             # Format status for display
             status = status_data.get('status', 'unknown')
             if status == 'running':
-                status_text = "🟢 Running"
-                color = "green"
+                self._update_composite_status(status_label, "VILA:", "Online", "green")
             elif status == 'starting':
-                status_text = "🟡 Starting"
-                color = "orange"
+                self._update_composite_status(status_label, "VILA:", "Offline", "red")
             elif status == 'error':
-                status_text = "🔴 Error"
-                color = "red"
+                self._update_composite_status(status_label, "VILA:", "Offline", "red")
             else:
-                status_text = "⚪ Stopped"
-                color = "gray"
+                self._update_composite_status(status_label, "VILA:", "Offline", "red")
+    
+    def _update_composite_status(self, status_label, prefix, status_text, color):
+        """Update a status label with colored text while keeping prefix in black"""
+        try:
+            # For single labels that were converted to composite frames
+            if hasattr(status_label, 'master') and len(status_label.master.winfo_children()) > 1:
+                # This is a composite status with separate prefix and status labels
+                status_label.config(text=status_text, foreground=color, font=("Arial", 9, "bold"))
+            else:
+                # Fallback for labels that haven't been converted yet
+                status_label.config(text=f"{prefix} {status_text}", foreground=color, font=("Arial", 9, "bold"))
+        except Exception as e:
+            logger.debug(f"Error updating composite status: {e}")
+            # Fallback to simple text update
+            status_label.config(text=f"{prefix} {status_text}", foreground=color, font=("Arial", 9, "bold"))
+
+    def _force_vila_status_update(self):
+        """Force immediate update of all VILA status labels"""
+        try:
+            vila_state = self._get_vila_model_state()
             
-            status_label.config(text=status_text, foreground=color)
+            # Update VILA status in System Status and manage VILA frame state
+            if hasattr(self, 'vila_status_label'):
+                if vila_state in ["Active", "Ready"]:
+                    self._update_composite_status(self.vila_status_label, "VILA:", "Online", "green")
+                    self._set_vila_frame_enabled(True)
+                else:
+                    self._update_composite_status(self.vila_status_label, "VILA:", "Offline", "red")
+                    self._set_vila_frame_enabled(False)
+                    
+            logger.debug(f"🔧 VILA status labels updated to: {vila_state}")
+        except Exception as e:
+            self.log_message(f"❌ Error updating VILA status labels: {e}")
+    
+    def _set_vila_frame_enabled(self, enabled):
+        """Enable or disable (grey out) the VILA Analysis frame"""
+        try:
+            if hasattr(self, 'vila_analysis_frame'):
+                # Set the state of all child widgets in the VILA Analysis frame
+                state = "normal" if enabled else "disabled"
+                self._set_widget_state_recursive(self.vila_analysis_frame, state)
+        except Exception as e:
+            logger.debug(f"Error setting VILA frame state: {e}")
+    
+    def _set_widget_state_recursive(self, widget, state):
+        """Recursively set the state of all child widgets"""
+        try:
+            # Try to set state if widget supports it
+            if hasattr(widget, 'config'):
+                try:
+                    widget.config(state=state)
+                except:
+                    pass  # Some widgets don't support state
+            
+            # Recursively process child widgets
+            for child in widget.winfo_children():
+                self._set_widget_state_recursive(child, state)
+        except Exception as e:
+            logger.debug(f"Error setting widget state: {e}")
     
     def _get_vila_server_status_from_gui(self):
         """Get VILA server status from GUI's VILA model"""
@@ -1629,7 +1697,7 @@ Keep it concise for real-time navigation.""",
         if auto:
             self.log_message(f"🔄 Auto VILA analysis: {analysis_type}")
         else:
-            self.log_message(f"🔍 Quick VILA analysis requested: {analysis_type}")
+            logger.debug(f"🔍 Quick VILA analysis requested: {analysis_type}")
     
     def _request_vila_analysis(self):
         """Request VILA analysis with current prompt"""
@@ -1640,25 +1708,36 @@ Keep it concise for real-time navigation.""",
                 return
             
             # Update status to show processing
-            self.vila_status_label.config(text="🔄 Processing VILA Request...", foreground="orange")
+            self._update_composite_status(self.vila_status_label, "VILA:", "Processing...", "orange")
+            
+            # Determine which image to use based on camera source
+            image_to_use = None
+            if self.camera_source == "loaded" and self.loaded_image:
+                # Convert PIL image to ROS Image for analysis
+                image_to_use = self._pil_to_ros_image(self.loaded_image)
+                logger.debug(f"📷 Using loaded image for VILA analysis")
+            elif self.camera_source == "robot" and self.current_image:
+                # Use current camera image (already in ROS format in ros_node)
+                logger.debug(f"📷 Using robot camera image for VILA analysis")
             
             # Send request to VILA server
-            success = self.ros_node.request_vila_analysis(prompt)
+            success = self.ros_node.request_vila_analysis(prompt, image_to_use)
             
             if success:
-                self.log_message(f"🔍 VILA analysis requested: {prompt[:50]}...")
+                # Keep important VILA analysis requests in user log
+                self.log_message(f"🔍 VILA analysis: {prompt[:30]}...")
             else:
-                self.vila_status_label.config(text="❌ VILA Service Unavailable", foreground="red")
+                self._update_composite_status(self.vila_status_label, "VILA:", "Offline", "red")
                 messagebox.showerror("Service Error", "VILA analysis service is not available.")
             
         except Exception as e:
             self.log_message(f"❌ Error requesting VILA analysis: {e}")
-            self.vila_status_label.config(text="❌ VILA Request Failed", foreground="red")
+            self._update_composite_status(self.vila_status_label, "VILA:", "Offline", "red")
     
     def _on_camera_source_change(self):
         """Handle camera source change"""
         self.camera_source = self.camera_source_var.get()
-        self.log_message(f"📷 Camera source changed to: {self.camera_source}")
+        logger.debug(f"📷 Camera source changed to: {self.camera_source}")
         
         # Update display based on source
         if self.camera_source == "loaded" and self.loaded_image:
@@ -1667,7 +1746,7 @@ Keep it concise for real-time navigation.""",
             self._update_camera_display(self.current_image)
         elif self.camera_source == "sim":
             # TODO: Load simulator image if available
-            self.log_message("📷 Simulator camera not yet implemented")
+            logger.debug("📷 Simulator camera not yet implemented")
     
     def _load_image_file(self):
         """Load an image file for analysis"""
@@ -1683,7 +1762,9 @@ Keep it concise for real-time navigation.""",
             if file_path:
                 # Load and display the image
                 self.loaded_image = Image.open(file_path)
-                self.log_message(f"📁 Loaded image: {file_path}")
+                # Keep file loading in user log but make it more concise
+                filename = file_path.split('/')[-1] if '/' in file_path else file_path
+                self.log_message(f"📁 Loaded: {filename}")
                 
                 # Switch to loaded image source and display
                 self.camera_source_var.set("loaded")
@@ -1697,9 +1778,10 @@ Keep it concise for real-time navigation.""",
     def _update_camera_display(self, pil_image):
         """Update the camera display with a PIL image"""
         try:
-            # Resize image to fit display (max 400x300)
+            # Keep native size for camera feed (640x480 or scale to fit frame)
             display_image = pil_image.copy()
-            display_image.thumbnail((400, 300), Image.Resampling.LANCZOS)
+            # Scale to fit the camera frame while maintaining aspect ratio
+            display_image.thumbnail((420, 350), Image.Resampling.LANCZOS)
             
             # Convert to Tkinter PhotoImage
             photo = ImageTk.PhotoImage(display_image)
@@ -1710,6 +1792,30 @@ Keep it concise for real-time navigation.""",
             
         except Exception as e:
             self.log_message(f"❌ Error updating camera display: {e}")
+    
+    def _pil_to_ros_image(self, pil_image):
+        """Convert PIL Image to ROS Image message"""
+        try:
+            import cv2
+            import numpy as np
+            from sensor_msgs.msg import Image as RosImage
+            from cv_bridge import CvBridge
+            
+            # Convert PIL to OpenCV format (RGB to BGR)
+            cv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            
+            # Fix mirroring: Flip image horizontally to correct orientation
+            # This ensures loaded images appear the same way as they do in the camera feed
+            cv_image = cv2.flip(cv_image, 1)  # 1 = horizontal flip
+            
+            # Convert to ROS Image
+            bridge = CvBridge()
+            ros_image = bridge.cv2_to_imgmsg(cv_image, "bgr8")
+            
+            return ros_image
+        except Exception as e:
+            self.log_message(f"❌ Error converting PIL to ROS image: {e}")
+            return None
     
     def cleanup(self):
         """Cleanup ROS2 resources and shutdown entire system"""
@@ -1777,17 +1883,31 @@ Keep it concise for real-time navigation.""",
             robot_info = ttk.Frame(info_frame)
             robot_info.pack(side=tk.LEFT, fill=tk.X, expand=True)
             
-            ttk.Label(robot_info, text=f"Robot ID: {self.robot_id}", font=("Arial", 10, "bold")).pack(anchor=tk.W)
+            # Robot ID removed as requested
             
             # Status indicators (center)
             status_frame = ttk.Frame(info_frame)
             status_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=20)
             
-            self.ros_status_label = ttk.Label(status_frame, text="🟡 Robot: Checking...", foreground="orange")
-            self.ros_status_label.pack(anchor=tk.W)
+            # Create composite Robot status
+            robot_status_frame = ttk.Frame(status_frame)
+            robot_status_frame.pack(anchor=tk.W, pady=2)
             
-            self.vila_status_label = ttk.Label(status_frame, text="⚫ VILA Checking...", foreground="gray")
-            self.vila_status_label.pack(anchor=tk.W)
+            robot_prefix = ttk.Label(robot_status_frame, text="Robot:", foreground="black")
+            robot_prefix.pack(side=tk.LEFT)
+            
+            self.ros_status_label = ttk.Label(robot_status_frame, text="Offline", foreground="red", font=("Arial", 9, "bold"))
+            self.ros_status_label.pack(side=tk.LEFT, padx=(5, 0))
+            
+            # Create composite VILA status (moved back from VILA Analysis frame)
+            vila_status_frame = ttk.Frame(status_frame)
+            vila_status_frame.pack(anchor=tk.W, pady=2)
+            
+            vila_prefix = ttk.Label(vila_status_frame, text="VILA:", foreground="black")
+            vila_prefix.pack(side=tk.LEFT)
+            
+            self.vila_status_label = ttk.Label(vila_status_frame, text="Offline", foreground="red", font=("Arial", 9, "bold"))
+            self.vila_status_label.pack(side=tk.LEFT, padx=(5, 0))
             
             # System metrics (right side)
             metrics_frame = ttk.Frame(info_frame)
@@ -1834,38 +1954,38 @@ Keep it concise for real-time navigation.""",
             # Store button references for enable/disable functionality
             self.movement_buttons = []
             
-            # Forward
-            forward_btn = ttk.Button(button_frame, text="↑ Forward", width=12,
+            # Forward (very compact buttons to fit frame)
+            forward_btn = ttk.Button(button_frame, text="↑", width=3,
                                     command=lambda: self._send_movement_command("move_forward"))
-            forward_btn.grid(row=0, column=1, pady=2)
+            forward_btn.grid(row=0, column=1, pady=1, padx=1)
             self.movement_buttons.append(forward_btn)
             
             # Left and Right
-            left_btn = ttk.Button(button_frame, text="← Left", width=12,
+            left_btn = ttk.Button(button_frame, text="←", width=3,
                                  command=lambda: self._send_movement_command("turn_left"))
-            left_btn.grid(row=1, column=0, padx=2, pady=2)
+            left_btn.grid(row=1, column=0, padx=1, pady=1)
             self.movement_buttons.append(left_btn)
             
-            right_btn = ttk.Button(button_frame, text="→ Right", width=12,
+            right_btn = ttk.Button(button_frame, text="→", width=3,
                                   command=lambda: self._send_movement_command("turn_right"))
-            right_btn.grid(row=1, column=2, padx=2, pady=2)
+            right_btn.grid(row=1, column=2, padx=1, pady=1)
             self.movement_buttons.append(right_btn)
             
             # Backward
-            backward_btn = ttk.Button(button_frame, text="↓ Backward", width=12,
+            backward_btn = ttk.Button(button_frame, text="↓", width=3,
                                      command=lambda: self._send_movement_command("move_backward"))
-            backward_btn.grid(row=2, column=1, pady=2)
+            backward_btn.grid(row=2, column=1, pady=1, padx=1)
             self.movement_buttons.append(backward_btn)
             
             # Stop button (center) - always enabled for safety
-            stop_btn = ttk.Button(button_frame, text="⏹ STOP", width=12,
+            stop_btn = ttk.Button(button_frame, text="⏹", width=3,
                                  command=lambda: self._send_movement_command("stop"))
-            stop_btn.grid(row=1, column=1, pady=2)
+            stop_btn.grid(row=1, column=1, pady=1, padx=1)
             
-            # Emergency stop - always enabled for safety
-            emergency_btn = ttk.Button(parent, text="🚨 EMERGENCY STOP", 
+            # Emergency stop - always enabled for safety (compact for small frame)
+            emergency_btn = ttk.Button(parent, text="STOP", width=8,
                                       command=self._emergency_stop)
-            emergency_btn.pack(pady=10)
+            emergency_btn.pack(pady=2)
             
             # Initially disable movement buttons (safety starts as False)
             self._update_button_states(False)
@@ -1892,9 +2012,9 @@ Keep it concise for real-time navigation.""",
             ttk.Button(source_frame, text="📁 Load", 
                       command=self._load_image_file).pack(side=tk.RIGHT)
             
-            # Camera display
+            # Camera display (sized for native camera feed)
             self.camera_label = ttk.Label(parent, text="No camera feed", 
-                                         relief=tk.SUNKEN, width=50, anchor=tk.CENTER)
+                                         relief=tk.SUNKEN, anchor=tk.CENTER)
             self.camera_label.pack(fill=tk.BOTH, expand=True, pady=5)
             
             print("🔧 DEBUG: Camera section created")
@@ -1904,9 +2024,9 @@ Keep it concise for real-time navigation.""",
     def _create_vila_section(self, parent):
         """Create VILA analysis section"""
         try:
-            # Status indicator
-            self.vila_status_indicator = ttk.Label(parent, text="⚫ VILA Checking...", foreground="gray")
-            self.vila_status_indicator.pack(pady=5)
+            # VILA status moved to System Status frame - no longer needed here
+            # Store reference to parent for greying out when offline
+            self.vila_analysis_frame = parent
             
             # Auto analysis toggle
             self.vila_auto_var = tk.BooleanVar(value=False)
@@ -1950,8 +2070,11 @@ Keep it concise for real-time navigation.""",
             self.log_text.pack(fill=tk.BOTH, expand=True)
             
             # Add initial message
-            self.log_message("🤖 Robot GUI initialized - Single page design")
-            self.log_message("🔗 Connected to standalone VILA server")
+            # Move initialization messages to debug
+            logger.debug("🤖 Robot GUI initialized - Single page design")
+            logger.debug("🔗 Connected to standalone VILA server")
+            # Show a single user-friendly startup message
+            self.log_message("🚀 Robot Control System Ready")
             
             print("🔧 DEBUG: Log section created")
         except Exception as e:
@@ -1960,13 +2083,15 @@ Keep it concise for real-time navigation.""",
     def _test_vila_connection(self):
         """Test connection to VILA server"""
         try:
-            self.log_message("🔍 Testing VILA server connection...")
+            logger.debug("🔍 Testing VILA server connection...")
+            # Show user-friendly message instead
+            self.log_message("🔍 Testing VILA connection...")
             if self.ros_node and hasattr(self.ros_node, 'request_vila_analysis'):
                 success = self.ros_node.request_vila_analysis("Test connection")
                 if success:
-                    self.log_message("✅ VILA server connection test sent")
+                    self.log_message("✅ VILA connection test sent")
                 else:
-                    self.log_message("❌ VILA server connection test failed")
+                    self.log_message("❌ VILA connection test failed")
             else:
                 self.log_message("⚠️ ROS node not available for testing")
         except Exception as e:
