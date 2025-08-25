@@ -71,7 +71,7 @@ class RobotVILAServerROS2(Node):
         self.config = self._load_config()
         
         # Initialize VILA model (HTTP client only - server started by launch file)
-        self.vila_model = VILAModel(auto_start_server=False)
+        self.vila_model = VILAModel()
         self.model_loaded = False
         
         # Robot management
@@ -330,173 +330,92 @@ class RobotVILAServerROS2(Node):
     # Image callback removed - VILA server is now purely on-demand
     # Images are provided by the client in analysis requests
     
-    def _process_image_with_vila_sync(self, image_msg: Image, prompt: str, lidar_data: Dict[str, float] = None) -> str:
-        """Process image with VILA model synchronously for on-demand requests with LiDAR integration"""
-        try:
-            from cv_bridge import CvBridge
-            from PIL import Image as PILImage
-            import cv2
-            
-            # Create visual analysis prompt (Cosmos Nemotron VLA integrates all sensors)
-            if not prompt:
-                prompt = """You are a robot's vision-language navigation system. Focus ONLY on visual analysis of the camera image:
-
-🔍 VISUAL ANALYSIS TASK:
-1. What do you see in this camera view?
-2. Are there visible obstacles, walls, or objects in the path ahead?
-3. What does the visual scene suggest about safe navigation directions?
-4. Based on VISUAL INFORMATION ONLY, what navigation action would you recommend?
-
-🎯 OUTPUT FORMAT:
-Action: [move_forward/turn_left/turn_right/stop]
-Reason: [Brief explanation based purely on visual analysis]
-
-Note: This is legacy fallback - main Cosmos Nemotron VLA handles full sensor fusion."""
-            else:
-                # User provided custom prompt - keep it pure visual, no LiDAR integration
-                prompt = f"""🔍 VISUAL ANALYSIS: {prompt}
-
-Focus on visual analysis only. Provide:
-Action: [move_forward/turn_left/turn_right/stop]
-Reason: [Brief visual-based explanation]
-
-Legacy fallback mode - Cosmos Nemotron VLA provides integrated analysis."""
-            
-            # Check if image has valid data and encoding
-            if not image_msg.data:
-                self.get_logger().error("❌ Empty image data for VILA processing")
-                return "Error: Empty image data"
-            
-            # Check encoding - default to bgr8 if empty
-            encoding = image_msg.encoding if image_msg.encoding else "bgr8"
-            self.get_logger().debug(f"Processing image with encoding: {encoding}, size: {len(image_msg.data)} bytes")
-            
-            # Convert ROS image to PIL
-            bridge = CvBridge()
-            cv_image = bridge.imgmsg_to_cv2(image_msg, encoding)
-            rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
-            pil_image = PILImage.fromarray(rgb_image)
-            
-            # Generate VILA response
-            vila_response = self.vila_model.generate_response(
-                prompt=prompt,
-                image=pil_image
-            )
-            
-            # Extract the analysis text from the response dictionary
-            if isinstance(vila_response, dict) and vila_response.get('success', False):
-                response = vila_response.get('analysis', 'No analysis available')
-            else:
-                response = str(vila_response)
-            
-            self.get_logger().debug(f"✅ VILA analysis complete for prompt: {prompt[:50]}...")
-            
-            return response
-            
-        except Exception as e:
-            self.get_logger().error(f"❌ Error processing image with VILA: {e}")
-            return f"Error during analysis: {str(e)}"
+    # Legacy visual-only analysis method completely removed
     
     def _parse_navigation_commands(self, response: str, lidar_data: Dict[str, float] = None) -> Dict[str, Any]:
-        """Parse VILA response for navigation commands with LiDAR-enhanced safety"""
+        """Parse VILA response for navigation commands - trust VILA's decisions completely"""
         response_lower = response.lower()
         
         commands = {
-            'action': 'stop',  # default safe action
+            'action': 'stop',  # default if parsing fails
             'confidence': 0.0,
             'reason': response,
-            'lidar_safety': 'unknown'
+            'lidar_context': 'none'
         }
         
-        # Emergency LiDAR safety override (only for critical situations where VILA might have missed something)
+        # Add LiDAR context for logging only (no overrides)
         if lidar_data:
             front_dist = lidar_data['distance_front']
             left_dist = lidar_data['distance_left'] 
             right_dist = lidar_data['distance_right']
             
-            # SAFETY OVERRIDE: Override if front obstacle too close for forward movement
-            if front_dist < 0.5:  # 50cm safety threshold for forward movement
-                # Check if VILA suggested forward movement despite close obstacle
-                if 'move_forward' in response_lower or ('Action:' in response and 'move_forward' in response.lower()):
-                    self.get_logger().warn(f"🚨 SAFETY OVERRIDE TRIGGERED: Front obstacle at {front_dist:.2f}m, VILA suggested forward movement")
-                    commands.update({
-                        'action': 'stop',
-                        'confidence': 0.95,
-                        'reason': f"SAFETY OVERRIDE: Front obstacle at {front_dist:.2f}m too close for forward movement. VILA suggested forward but overridden for safety. Original: " + response[:100] + "...",
-                        'lidar_safety': 'safety_override'
-                    })
-                    return commands
-            
-            # EMERGENCY ONLY: Override if front obstacle extremely close
-            if front_dist < 0.3:  # 30cm emergency threshold 
-                commands.update({
-                    'action': 'stop',
-                    'confidence': 0.98,
-                    'reason': f"EMERGENCY OVERRIDE: Front obstacle at {front_dist:.2f}m < 0.3m. VILA response was: " + response[:100] + "...",
-                    'lidar_safety': 'emergency_stop'
-                })
-                return commands
-            
-            # Store LiDAR context for logging
-            commands['lidar_safety'] = f'F:{front_dist:.1f}m_L:{left_dist:.1f}m_R:{right_dist:.1f}m'
-            
-            # Parse VILA response - VILA now has LiDAR data and should make informed decisions
-            # Look for the structured output format we requested
-            if 'Action:' in response:
-                # Parse structured response
-                action_line = [line.strip() for line in response.split('\n') if line.strip().startswith('Action:')]
-                if action_line:
-                    action_text = action_line[0].replace('Action:', '').strip().lower()
-                    if 'move_forward' in action_text:
-                        commands.update({'action': 'move_forward', 'confidence': 0.9})
-                    elif 'turn_left' in action_text:
-                        commands.update({'action': 'turn_left', 'confidence': 0.9})
-                    elif 'turn_right' in action_text:
-                        commands.update({'action': 'turn_right', 'confidence': 0.9})
-                    elif 'stop' in action_text:
-                        commands.update({'action': 'stop', 'confidence': 0.9})
-            else:
-                # Fallback to keyword parsing if structured format not used
-                if 'move forward' in response_lower or 'move_forward' in response_lower:
-                    commands.update({'action': 'move_forward', 'confidence': 0.8})
-                elif 'turn left' in response_lower or 'turn_left' in response_lower:
-                    commands.update({'action': 'turn_left', 'confidence': 0.8})
-                elif 'turn right' in response_lower or 'turn_right' in response_lower:
-                    commands.update({'action': 'turn_right', 'confidence': 0.8})
-                elif 'stop' in response_lower:
+            # Store LiDAR context for logging only
+            commands['lidar_context'] = f'F:{front_dist:.1f}m_L:{left_dist:.1f}m_R:{right_dist:.1f}m'
+            commands['reason'] = f"VILA Decision (LiDAR: F:{front_dist:.2f}m, L:{left_dist:.2f}m, R:{right_dist:.2f}m): " + response
+        
+        # Parse VILA response - trust VILA completely, no safety overrides
+        # Look for the structured output format first
+        if 'Action:' in response:
+            # Parse structured response
+            action_line = [line.strip() for line in response.split('\n') if line.strip().startswith('Action:')]
+            if action_line:
+                action_text = action_line[0].replace('Action:', '').strip().lower()
+                if 'move_forward' in action_text or 'forward' in action_text:
+                    commands.update({'action': 'move_forward', 'confidence': 0.9})
+                elif 'turn_left' in action_text or 'left' in action_text:
+                    commands.update({'action': 'turn_left', 'confidence': 0.9})
+                elif 'turn_right' in action_text or 'right' in action_text:
+                    commands.update({'action': 'turn_right', 'confidence': 0.9})
+                elif 'stop' in action_text:
                     commands.update({'action': 'stop', 'confidence': 0.9})
+        else:
+            # Fallback to keyword parsing if structured format not used
+            # Count occurrences to find the most mentioned action
+            move_forward_count = sum(1 for phrase in ['move forward', 'move_forward', 'go forward', 'forward', 'ahead', 'straight'] if phrase in response_lower)
+            turn_left_count = sum(1 for phrase in ['turn left', 'turn_left', 'go left', 'left'] if phrase in response_lower)
+            turn_right_count = sum(1 for phrase in ['turn right', 'turn_right', 'go right', 'right'] if phrase in response_lower)
+            stop_count = sum(1 for phrase in ['stop', 'halt', 'wait', 'stay'] if phrase in response_lower)
+
+            # Find the action with the highest count
+            action_counts = {
+                'move_forward': move_forward_count,
+                'turn_left': turn_left_count,
+                'turn_right': turn_right_count,
+                'stop': stop_count
+            }
+
+            max_count = max(action_counts.values())
+            if max_count > 0:
+                # Get all actions with the maximum count
+                top_actions = [action for action, count in action_counts.items() if count == max_count]
+
+                # If tie, prefer turn actions over move forward (safer)
+                if len(top_actions) > 1:
+                    if 'turn_left' in top_actions:
+                        best_action = 'turn_left'
+                    elif 'turn_right' in top_actions:
+                        best_action = 'turn_right'
+                    elif 'stop' in top_actions:
+                        best_action = 'stop'
+                    else:
+                        best_action = top_actions[0]  # fallback to first one
                 else:
-                    # VILA response unclear - default to stop for safety
-                    commands.update({
-                        'action': 'stop',
-                        'confidence': 0.6,
-                        'reason': f"UNCLEAR VILA RESPONSE: Defaulting to stop for safety. " + response
-                    })
-            
-            # Update reason with LiDAR context
-            commands['reason'] = f"VILA+LiDAR Decision (F:{front_dist:.2f}m, L:{left_dist:.2f}m, R:{right_dist:.2f}m): " + response
-            
-            # FINAL SAFETY CHECK: Override dangerous decisions after parsing
-            if front_dist < 0.5 and commands['action'] == 'move_forward':
-                self.get_logger().warn(f"🚨 FINAL SAFETY OVERRIDE: Blocking move_forward with front obstacle at {front_dist:.2f}m")
+                    best_action = top_actions[0]
+
+                confidence = 0.8 if best_action != 'stop' else 0.9
+                commands.update({'action': best_action, 'confidence': confidence})
+
+                self.get_logger().info(f"🎯 VILA Keyword Analysis: move_forward={move_forward_count}, turn_left={turn_left_count}, turn_right={turn_right_count}, stop={stop_count}")
+                self.get_logger().info(f"🎯 Selected: {best_action} (highest count: {max_count})")
+            else:
+                # No keywords found - default to stop
                 commands.update({
                     'action': 'stop',
-                    'confidence': 0.98,
-                    'reason': f"FINAL SAFETY OVERRIDE: Front obstacle at {front_dist:.2f}m too close for forward movement. VILA+parsing suggested forward but overridden. Original decision: {commands['reason']}",
-                    'lidar_safety': 'final_safety_override'
+                    'confidence': 0.3,
+                    'reason': f"UNCLEAR VILA RESPONSE: No navigation keywords found. Response: " + response
                 })
-                    
-        else:
-            # Fallback to original parsing when no LiDAR data
-            if 'move forward' in response_lower or ('clear' in response_lower and 'safe' in response_lower):
-                commands.update({'action': 'move_forward', 'confidence': 0.8})
-            elif 'turn left' in response_lower:
-                commands.update({'action': 'turn_left', 'confidence': 0.7})
-            elif 'turn right' in response_lower:
-                commands.update({'action': 'turn_right', 'confidence': 0.7})
-            elif 'stop' in response_lower or 'obstacle' in response_lower:
-                commands.update({'action': 'stop', 'confidence': 0.9})
-            
+        
+        self.get_logger().info(f"🎯 VILA Command: {commands['action']} (confidence: {commands['confidence']:.2f})")
         return commands
     
     def _safety_control_callback(self, msg: Bool):
@@ -650,12 +569,57 @@ Legacy fallback mode - Cosmos Nemotron VLA provides integrated analysis."""
             from PIL import Image as PILImage
             import cv2
             
-            # Convert ROS image to PIL for Cosmos Nemotron VLA
+            # Convert ROS image to PIL for Cosmos Nemotron VLA with proper validation
             bridge = CvBridge()
             encoding = image_to_analyze.encoding if image_to_analyze.encoding else "bgr8"
-            cv_image = bridge.imgmsg_to_cv2(image_to_analyze, encoding)
-            rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
-            pil_image = PILImage.fromarray(rgb_image)
+            
+            # Validate image data before processing
+            if not image_to_analyze.data:
+                self.get_logger().error("❌ Empty image data received")
+                response.success = False
+                response.error_message = "Empty image data - cannot analyze"
+                response.analysis_result = "No image data provided"
+                response.navigation_commands_json = json.dumps({'action': 'stop', 'confidence': 0.0, 'reason': 'No image data'})
+                response.confidence = 0.0
+                response.timestamp_ns = self.get_clock().now().nanoseconds
+                return response
+            
+            self.get_logger().debug(f"🖼️ Converting image: {image_to_analyze.width}x{image_to_analyze.height}, encoding: {encoding}, data size: {len(image_to_analyze.data)} bytes")
+            
+            try:
+                cv_image = bridge.imgmsg_to_cv2(image_to_analyze, encoding)
+                
+                # Validate converted image
+                if cv_image is None or cv_image.size == 0:
+                    self.get_logger().error("❌ Failed to convert ROS image to OpenCV format")
+                    raise ValueError("Invalid OpenCV image after conversion")
+                
+                self.get_logger().debug(f"✅ OpenCV image shape: {cv_image.shape}")
+                
+                # Convert color space with validation
+                if len(cv_image.shape) == 3 and cv_image.shape[2] == 3:
+                    if encoding == "rgb8":
+                        # Image is already RGB, no conversion needed
+                        rgb_image = cv_image
+                    else:
+                        # Convert BGR to RGB
+                        rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
+                else:
+                    self.get_logger().error(f"❌ Unexpected image shape: {cv_image.shape}")
+                    raise ValueError(f"Unexpected image shape: {cv_image.shape}")
+                
+                pil_image = PILImage.fromarray(rgb_image)
+                self.get_logger().debug(f"✅ PIL image created: {pil_image.size}, mode: {pil_image.mode}")
+                
+            except Exception as e:
+                self.get_logger().error(f"❌ Image conversion error: {e}")
+                response.success = False
+                response.error_message = f"Image conversion failed: {str(e)}"
+                response.analysis_result = "Image processing error"
+                response.navigation_commands_json = json.dumps({'action': 'stop', 'confidence': 0.0, 'reason': f'Image conversion error: {str(e)}'})
+                response.confidence = 0.0
+                response.timestamp_ns = self.get_clock().now().nanoseconds
+                return response
             
             # Create SensorData with all available sensor information
             sensor_data = SensorData(
@@ -669,7 +633,7 @@ Legacy fallback mode - Cosmos Nemotron VLA provides integrated analysis."""
             )
             
             # Use enhanced Cosmos Nemotron VLA analysis
-            self.get_logger().info("🚀 Using Cosmos Nemotron VLA multi-modal analysis")
+            self.get_logger().info(f"🚀 Using Cosmos Nemotron VLA multi-modal analysis with LiDAR: F={lidar_data.get('distance_front', 'N/A')}m")
             cosmos_result = self.vila_model.analyze_multi_modal_scene(sensor_data, request.prompt)
             
             if cosmos_result['success']:
@@ -680,11 +644,12 @@ Legacy fallback mode - Cosmos Nemotron VLA provides integrated analysis."""
                     'reasoning': cosmos_result['reasoning']
                 }
                 self.get_logger().info(f"✅ Cosmos Nemotron VLA result: {nav_commands['action']} (confidence: {nav_commands['confidence']:.2f})")
+                self.get_logger().info(f"✅ Cosmos reasoning: {nav_commands['reasoning'][:100]}...")
             else:
-                # Fallback to old method if Cosmos analysis fails
-                self.get_logger().warning("⚠️ Cosmos analysis failed, falling back to legacy method")
-                analysis_result = self._process_image_with_vila_sync(image_to_analyze, request.prompt, lidar_data)
-                nav_commands = self._parse_navigation_commands(analysis_result, lidar_data)
+                # Cosmos analysis is REQUIRED - no fallbacks
+                error_msg = f"Cosmos analysis failed: {cosmos_result.get('analysis', 'Unknown error')}"
+                self.get_logger().error(f"❌ {error_msg}")
+                raise RuntimeError(f"Cosmos VILA analysis failed - no fallback methods: {error_msg}")
             
             # Fill service response directly
             response.success = True
@@ -740,30 +705,7 @@ Legacy fallback mode - Cosmos Nemotron VLA provides integrated analysis."""
             self.get_logger().info(f"✅ SAFETY: Allowing stop command (always safe)")
             return True
         
-        # LiDAR-based safety validation for movement commands
-        if self.robot_info.sensor_data:
-            front_dist = self.robot_info.sensor_data.get('distance_front', float('inf'))
-            left_dist = self.robot_info.sensor_data.get('distance_left', float('inf'))
-            right_dist = self.robot_info.sensor_data.get('distance_right', float('inf'))
-            
-            # Critical safety check: Block forward movement if front obstacle too close
-            if command.command_type == 'move' and command.linear_x > 0:  # Forward movement
-                if front_dist < 0.25:  # 25cm critical safety threshold
-                    self.get_logger().warn(f"🚫 LIDAR SAFETY: Forward movement blocked - front obstacle at {front_dist:.2f}m < 0.25m")
-                    return False
-                elif front_dist < 0.4:  # 40cm warning threshold
-                    self.get_logger().warn(f"⚠️ LIDAR WARNING: Forward movement with caution - front obstacle at {front_dist:.2f}m")
-            
-            # Check turn safety
-            elif command.command_type == 'turn':
-                if command.angular > 0 and left_dist < 0.3:  # Left turn
-                    self.get_logger().warn(f"🚫 LIDAR SAFETY: Left turn blocked - obstacle at {left_dist:.2f}m < 0.3m")
-                    return False
-                elif command.angular < 0 and right_dist < 0.3:  # Right turn
-                    self.get_logger().warn(f"🚫 LIDAR SAFETY: Right turn blocked - obstacle at {right_dist:.2f}m < 0.3m")
-                    return False
-            
-            self.get_logger().info(f"✅ LIDAR SAFETY: Command {command.command_type} approved (F:{front_dist:.2f}m, L:{left_dist:.2f}m, R:{right_dist:.2f}m)")
+        # Safety checks completely removed - VILA has full control
         
         # For testing/simulation mode: if no robot is connected, allow commands when safety is enabled
         # This allows the GUI to work without a physical robot

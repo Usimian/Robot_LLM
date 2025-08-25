@@ -1,0 +1,7 @@
+{
+    "input_types": [
+        "text_and_video",
+        "text_and_image"
+    ],
+    "model_size": "7b"
+}

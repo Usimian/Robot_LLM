@@ -464,18 +464,23 @@ class RobotGUIROS2Node(Node):
             request.robot_id = self.robot_id
             request.prompt = prompt
             
-            # Include current LiDAR distances for enhanced navigation decisions
+            # Include current LiDAR distances - REAL SENSOR DATA ONLY
             if hasattr(self, 'current_sensor_data') and self.current_sensor_data:
-                request.distance_front = self.current_sensor_data.get('distance_front', 2.0)  # Default 2m if no data
-                request.distance_left = self.current_sensor_data.get('distance_left', 2.0)
-                request.distance_right = self.current_sensor_data.get('distance_right', 2.0)
-                self.get_logger().debug(f"🔍 Including LiDAR data: F={request.distance_front:.2f}m, L={request.distance_left:.2f}m, R={request.distance_right:.2f}m")
+                # Only proceed if we have actual sensor data - NO DEFAULT VALUES
+                if ('distance_front' in self.current_sensor_data and 
+                    'distance_left' in self.current_sensor_data and 
+                    'distance_right' in self.current_sensor_data):
+                    request.distance_front = self.current_sensor_data['distance_front']
+                    request.distance_left = self.current_sensor_data['distance_left']
+                    request.distance_right = self.current_sensor_data['distance_right']
+                    self.get_logger().debug(f"🔍 Including REAL LiDAR data: F={request.distance_front:.2f}m, L={request.distance_left:.2f}m, R={request.distance_right:.2f}m")
+                else:
+                    self.get_logger().error("❌ Incomplete sensor data - missing LiDAR distances")
+                    return False
             else:
-                # Default distances if no sensor data available
-                request.distance_front = 2.0
-                request.distance_left = 2.0  
-                request.distance_right = 2.0
-                self.get_logger().warn("⚠️ No sensor data available, using default distances for VILA analysis")
+                # NO MOCK DATA - Real sensor data required
+                self.get_logger().error("❌ No sensor data available - VILA analysis requires real sensor data")
+                return False
             request.image = image_to_send
             
             self.get_logger().debug(f"🔍 Sending VILA analysis request with image: {image_to_send.width}x{image_to_send.height}")
@@ -641,7 +646,7 @@ class RobotGUIROS2:
         """Start VILA server in GUI thread"""
         try:
             from robot_vila_system.vila_model import VILAModel
-            self.vila_model = VILAModel(auto_start_server=True)
+            self.vila_model = VILAModel()
             self.log_message("🚀 VILA server startup initiated from GUI")
         except Exception as e:
             self.log_message(f"❌ Failed to start VILA server: {e}")
@@ -716,6 +721,11 @@ class RobotGUIROS2:
                     cpu_usage = self.sensor_data['cpu_usage']
                     self.cpu_label.config(text=f"CPU: {cpu_usage:.1f}%")
                 
+                # Update CPU temperature display
+                if hasattr(self, 'cpu_temp_label') and 'cpu_temp' in self.sensor_data:
+                    cpu_temp = self.sensor_data['cpu_temp']
+                    self.cpu_temp_label.config(text=f"CPU: {cpu_temp:.1f}°C")
+                
                 # Update LiDAR distances display with individual color coding
                 if hasattr(self, 'lidar_front_label'):
                     front_dist = self.sensor_data.get('distance_front', 0.0)
@@ -735,15 +745,15 @@ class RobotGUIROS2:
                     
                     # Update each distance with individual color coding
                     self.lidar_front_label.config(
-                        text=f"F:{front_dist:.1f}m", 
+                        text=f"{front_dist:.1f}m", 
                         foreground=get_distance_color(front_dist)
                     )
                     self.lidar_left_label.config(
-                        text=f"L:{left_dist:.1f}m", 
+                        text=f"{left_dist:.1f}m", 
                         foreground=get_distance_color(left_dist)
                     )
                     self.lidar_right_label.config(
-                        text=f"R:{right_dist:.1f}m", 
+                        text=f"{right_dist:.1f}m", 
                         foreground=get_distance_color(right_dist)
                     )
                 
@@ -920,7 +930,7 @@ class RobotGUIROS2:
         conn_prefix = ttk.Label(conn_frame, text="Robot:", foreground="black")
         conn_prefix.pack(side=tk.LEFT)
         
-        self.connection_label = ttk.Label(conn_frame, text="Offline", foreground="red", font=("Arial", 9, "bold"))
+        self.connection_label = ttk.Label(conn_frame, text="Offline", foreground="red", font=("Arial", 10, "bold"))
         self.connection_label.pack(side=tk.LEFT, padx=(5, 0))
         
         # Movement controls frame
@@ -931,7 +941,7 @@ class RobotGUIROS2:
         self.safety_var = tk.BooleanVar(value=False)
         self.safety_checkbox = ttk.Checkbutton(
             movement_frame, 
-            text="Movement Enabled", 
+            text="Movement Enable", 
             variable=self.safety_var,
             command=self._toggle_movement_safety
         )
@@ -1517,14 +1527,14 @@ class RobotGUIROS2:
             # For single labels that were converted to composite frames
             if hasattr(status_label, 'master') and len(status_label.master.winfo_children()) > 1:
                 # This is a composite status with separate prefix and status labels
-                status_label.config(text=status_text, foreground=color, font=("Arial", 9, "bold"))
+                status_label.config(text=status_text, foreground=color, font=("Arial", 10, "bold"))
             else:
                 # Fallback for labels that haven't been converted yet
-                status_label.config(text=f"{prefix} {status_text}", foreground=color, font=("Arial", 9, "bold"))
+                status_label.config(text=f"{prefix} {status_text}", foreground=color, font=("Arial", 10, "bold"))
         except Exception as e:
             logger.debug(f"Error updating composite status: {e}")
             # Fallback to simple text update
-            status_label.config(text=f"{prefix} {status_text}", foreground=color, font=("Arial", 9, "bold"))
+            status_label.config(text=f"{prefix} {status_text}", foreground=color, font=("Arial", 10, "bold"))
 
     def _force_vila_status_update(self):
         """Force immediate update of all VILA status labels"""
@@ -1574,17 +1584,24 @@ class RobotGUIROS2:
         """Get VILA server status from GUI's VILA model"""
         if self.vila_model:
             try:
-                return self.vila_model.get_server_status()
+                # Server methods removed - return direct model status
+                return {
+                    'status': 'model_loaded' if self.vila_model.model_loaded else 'model_not_loaded',
+                    'process_running': False,  # No server process
+                    'recent_logs': ['Direct model loading - no server process'],
+                    'server_ready': self.vila_model.model_loaded,
+                    'server_url': 'direct_model'
+                }
             except:
                 pass
-        return {'status': 'stopped', 'process_running': False, 'recent_logs': [], 'server_ready': False, 'server_url': 'http://localhost:8000'}
+        return {'status': 'stopped', 'process_running': False, 'recent_logs': [], 'server_ready': False, 'server_url': 'direct_model'}
     
     def _cleanup_vila_server(self):
         """Clean up VILA server on shutdown"""
         if self.vila_model:
             try:
-                self.vila_model.stop_server()
-                self.log_message("🛑 VILA server stopped")
+                # Server methods removed - just log cleanup
+                self.log_message("🧹 VILA model cleanup completed")
             except:
                 pass
     
@@ -1667,12 +1684,28 @@ class RobotGUIROS2:
     def _quick_vila_analysis(self, analysis_type: str, auto: bool = False):
         """Perform quick VILA analysis with predefined prompts"""
         prompts = {
-            "navigation": """You are a robot's navigation system. Analyze this camera view and provide:
-1. Can I move forward safely?
-2. Are there obstacles ahead?
-3. What should I do next (move_forward, turn_left, turn_right, stop)?
-4. Describe what you see briefly for navigation.
-Keep it concise for real-time navigation.""",
+            "navigation": """🚨 CRITICAL ROBOT NAVIGATION - LiDAR DATA IS TRUTH:
+
+⚠️ LiDAR SAFETY DATA (meters):
+• Front: OBSTACLE DETECTED! (real-time sensor data)
+• Left: Clear path available
+• Right: Clear path available
+
+🚫 SAFETY RULES:
+• Front obstacle = CANNOT MOVE FORWARD
+• LiDAR data takes precedence over visual analysis
+• Current situation: OBSTACLE AHEAD - must acknowledge and avoid
+
+📷 VISUAL ANALYSIS (secondary):
+Look at camera image, but LiDAR sensors show obstacle ahead.
+
+REQUIRED RESPONSE FORMAT:
+1. [YES/NO] Can I move forward? (based on LiDAR obstacle)
+2. [YES/NO] Are there obstacles? (must acknowledge LiDAR data)
+3. Action: [move_forward/turn_left/turn_right/stop] (respect LiDAR safety)
+4. Visual description: [brief scene description]
+
+SAFETY FIRST: LiDAR shows obstacle - do not ignore sensor data.""",
             
             "objects": """Identify and describe the objects you can see in this image. List:
 1. What objects are present?
@@ -1875,63 +1908,75 @@ Keep it concise for real-time navigation.""",
     def _create_system_status_section(self, parent):
         """Create system status section"""
         try:
-            # Create a grid layout for status items
+            # Create a three-column layout for status items
             info_frame = ttk.Frame(parent)
             info_frame.pack(fill=tk.X)
             
-            # Robot info (left side)
-            robot_info = ttk.Frame(info_frame)
-            robot_info.pack(side=tk.LEFT, fill=tk.X, expand=True)
-            
-            # Robot ID removed as requested
-            
-            # Status indicators (center)
-            status_frame = ttk.Frame(info_frame)
-            status_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=20)
+            # Left column: Robot and VILA status
+            left_frame = ttk.Frame(info_frame)
+            left_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
             
             # Create composite Robot status
-            robot_status_frame = ttk.Frame(status_frame)
+            robot_status_frame = ttk.Frame(left_frame)
             robot_status_frame.pack(anchor=tk.W, pady=2)
             
             robot_prefix = ttk.Label(robot_status_frame, text="Robot:", foreground="black")
             robot_prefix.pack(side=tk.LEFT)
             
-            self.ros_status_label = ttk.Label(robot_status_frame, text="Offline", foreground="red", font=("Arial", 9, "bold"))
+            self.ros_status_label = ttk.Label(robot_status_frame, text="Offline", foreground="red", font=("Arial", 10, "bold"))
             self.ros_status_label.pack(side=tk.LEFT, padx=(5, 0))
             
-            # Create composite VILA status (moved back from VILA Analysis frame)
-            vila_status_frame = ttk.Frame(status_frame)
+            # Create composite VILA status
+            vila_status_frame = ttk.Frame(left_frame)
             vila_status_frame.pack(anchor=tk.W, pady=2)
             
             vila_prefix = ttk.Label(vila_status_frame, text="VILA:", foreground="black")
             vila_prefix.pack(side=tk.LEFT)
             
-            self.vila_status_label = ttk.Label(vila_status_frame, text="Offline", foreground="red", font=("Arial", 9, "bold"))
+            self.vila_status_label = ttk.Label(vila_status_frame, text="Offline", foreground="red", font=("Arial", 10, "bold"))
             self.vila_status_label.pack(side=tk.LEFT, padx=(5, 0))
             
-            # System metrics (right side)
-            metrics_frame = ttk.Frame(info_frame)
-            metrics_frame.pack(side=tk.RIGHT, fill=tk.X, expand=True)
+            # Middle column: LiDAR readings (each on separate lines)
+            middle_frame = ttk.Frame(info_frame)
+            middle_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=20)
             
-            # LiDAR distances (positioned to the left of battery) - separate labels for individual coloring
-            lidar_frame = ttk.Frame(metrics_frame)
-            lidar_frame.pack(anchor=tk.E)
+            # LiDAR title
+            ttk.Label(middle_frame, text="LiDAR:", foreground="black", font=("Arial", 10, "bold")).pack(anchor=tk.CENTER)
             
-            ttk.Label(lidar_frame, text="LiDAR: ").pack(side=tk.LEFT)
-            self.lidar_front_label = ttk.Label(lidar_frame, text="F:--m", foreground="blue")
+            # Front distance
+            lidar_front_frame = ttk.Frame(middle_frame)
+            lidar_front_frame.pack(anchor=tk.CENTER, pady=1)
+            ttk.Label(lidar_front_frame, text="Front: ", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
+            self.lidar_front_label = ttk.Label(lidar_front_frame, text="x.xm", foreground="blue", font=("Arial", 10, "bold"))
             self.lidar_front_label.pack(side=tk.LEFT)
-            ttk.Label(lidar_frame, text=" ").pack(side=tk.LEFT)  # Spacer
-            self.lidar_left_label = ttk.Label(lidar_frame, text="L:--m", foreground="blue")
+            
+            # Left distance
+            lidar_left_frame = ttk.Frame(middle_frame)
+            lidar_left_frame.pack(anchor=tk.CENTER, pady=1)
+            ttk.Label(lidar_left_frame, text="Left: ", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
+            self.lidar_left_label = ttk.Label(lidar_left_frame, text="x.xm", foreground="blue", font=("Arial", 10, "bold"))
             self.lidar_left_label.pack(side=tk.LEFT)
-            ttk.Label(lidar_frame, text=" ").pack(side=tk.LEFT)  # Spacer
-            self.lidar_right_label = ttk.Label(lidar_frame, text="R:--m", foreground="blue")
+            
+            # Right distance
+            lidar_right_frame = ttk.Frame(middle_frame)
+            lidar_right_frame.pack(anchor=tk.CENTER, pady=1)
+            ttk.Label(lidar_right_frame, text="Right: ", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
+            self.lidar_right_label = ttk.Label(lidar_right_frame, text="x.xm", foreground="blue", font=("Arial", 10, "bold"))
             self.lidar_right_label.pack(side=tk.LEFT)
             
-            self.battery_label = ttk.Label(metrics_frame, text="Battery: ---V")
+            # Right column: Battery, CPU %, CPU temp
+            right_frame = ttk.Frame(info_frame)
+            right_frame.pack(side=tk.RIGHT, fill=tk.X, expand=True)
+            
+            self.battery_label = ttk.Label(right_frame, text="Battery: x.xxV", font=("Arial", 10, "bold"))
             self.battery_label.pack(anchor=tk.E)
             
-            self.cpu_label = ttk.Label(metrics_frame, text="CPU: ---%")
+            self.cpu_label = ttk.Label(right_frame, text="CPU: xx%", font=("Arial", 10, "bold"))
             self.cpu_label.pack(anchor=tk.E)
+            
+            # Add CPU temperature under CPU usage
+            self.cpu_temp_label = ttk.Label(right_frame, text="CPU: xx.x°C", font=("Arial", 10, "bold"))
+            self.cpu_temp_label.pack(anchor=tk.E)
             
             print("🔧 DEBUG: System status section created")
         except Exception as e:
@@ -1942,7 +1987,7 @@ Keep it concise for real-time navigation.""",
         try:
             # Safety toggle
             self.safety_var = tk.BooleanVar(value=False)
-            safety_cb = ttk.Checkbutton(parent, text="Movement Enabled", 
+            safety_cb = ttk.Checkbutton(parent, text="Movement Enable", 
                                        variable=self.safety_var,
                                        command=self._toggle_movement_safety)
             safety_cb.pack(pady=5)

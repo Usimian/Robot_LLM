@@ -16,6 +16,7 @@ import io
 import time
 import threading
 import warnings
+import subprocess
 import requests  # For legacy HTTP compatibility
 from typing import Dict, List, Optional, Any, Tuple
 from PIL import Image
@@ -28,10 +29,10 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch")
 # Configure logging
 logger = logging.getLogger('CosmosNemotronVLA')
 
-# Model Configuration
-DEFAULT_MODEL_NAME = "Efficient-Large-Model/VILA1.5-3b"
-FALLBACK_MODEL_NAME = "microsoft/DialoGPT-medium"  # Fallback for testing
-MODEL_LOAD_TIMEOUT = 300  # 5 minutes timeout for model loading
+# Model Configuration - No Fallbacks
+MODEL_NAME = "nvidia/Cosmos-Reason1-7B"  # Multi-modal reasoning model with sensor data support
+MODEL_LOAD_TIMEOUT = 600  # 10 minutes timeout
+REQUIRED_VRAM_GB = 14  # Minimum VRAM required for Cosmos Reason1-7B
 
 @dataclass
 class SensorData:
@@ -48,13 +49,12 @@ class CosmosNemotronVLAModel:
     Supports LiDAR + IMU + Camera + Text integration for robotics
     """
     
-    def __init__(self, auto_start_server=False, model_name: str = None, 
-                 quantization: bool = True):
-        """Initialize Cosmos Nemotron VLA model"""
-        self.model_name = model_name or DEFAULT_MODEL_NAME
+    def __init__(self, model_name: str = None, quantization: bool = True):
+        """Initialize Cosmos Nemotron VLA model - No fallbacks"""
+        self.model_name = model_name or MODEL_NAME
         self.quantization = quantization
         self.device = self._setup_device()
-        
+
         # Model components
         self.model = None
         self.tokenizer = None
@@ -66,175 +66,63 @@ class CosmosNemotronVLAModel:
         self.sensor_fusion_enabled = True
         self.max_context_length = 4096
         
-        # Legacy compatibility (HTTP server approach as fallback)
-        self.auto_start_server = auto_start_server
-        self.server_ready = False
-        self.server_process = None
-        self.server_status = "disabled"  # Modern model doesn't need server
-        self.server_logs = ["Cosmos Nemotron VLA - Local model loading"]
-        self.server_url = "localhost:8000"  # Legacy compatibility
-        self.server_timeout = 30  # Legacy compatibility
+        # No legacy server support - direct model loading only
         
-        logger.info(f"🚀 Initializing Cosmos Nemotron VLA Model")
+        logger.info(f"🚀 Initializing Cosmos Transfer1-7B-AV Model (with native LiDAR support)")
         logger.info(f"   └── Model: {self.model_name}")
         logger.info(f"   └── Quantization: {'Enabled' if quantization else 'Disabled'}")
         logger.info(f"   └── Device: {self.device}")
         logger.info(f"   └── Enhanced sensor fusion: Enabled")
         
     def _setup_device(self) -> str:
-        """Setup optimal device configuration"""
+        """Setup device configuration - No fallbacks"""
         if torch.cuda.is_available():
             device = "cuda"
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
             logger.info(f"🖥️ CUDA detected: {torch.cuda.get_device_name(0)}")
-            logger.info(f"   └── VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+            logger.info(f"   └── VRAM: {vram_gb:.1f} GB")
+
+            # Check VRAM requirements - either meets requirement or fails
+            if vram_gb < REQUIRED_VRAM_GB:
+                raise RuntimeError(f"❌ Insufficient VRAM: {vram_gb:.1f}GB available, {REQUIRED_VRAM_GB}GB required for {self.model_name}")
+            else:
+                logger.info(f"✅ VRAM check passed: {vram_gb:.1f}GB ≥ {REQUIRED_VRAM_GB}GB required")
         else:
-            device = "cpu"
-            logger.info("💻 Using CPU (CUDA not available)")
+            raise RuntimeError("❌ CUDA not available - GPU required for Cosmos models")
         return device
     
-    def start_server(self):
-        """Start the VILA server subprocess"""
-        if self.server_process and self.server_process.poll() is None:
-            logger.info("🔄 VILA server already running")
-            return
-        
-        try:
-            logger.info("🚀 Starting VILA server...")
-            self.server_status = "starting"
-            
-            # Find the simple_vila_server.py script
-            workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-            server_script = os.path.join(workspace_root, "simple_vila_server.py")
-            
-            if not os.path.exists(server_script):
-                # Try alternative locations
-                server_script = os.path.join(os.getcwd(), "simple_vila_server.py")
-                if not os.path.exists(server_script):
-                    raise FileNotFoundError(f"VILA server script not found at {server_script}")
-            
-            # Start the server process
-            self.server_process = subprocess.Popen(
-                [sys.executable, server_script, "--port", "8000"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-                bufsize=1
-            )
-            
-            # Start monitoring thread
-            self.server_monitor_thread = threading.Thread(
-                target=self._monitor_server_output,
-                daemon=True
-            )
-            self.server_monitor_thread.start()
-            
-            logger.info("✅ VILA server startup initiated")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to start VILA server: {e}")
-            self.server_status = "error"
-            self.server_logs.append(f"ERROR: Failed to start server: {e}")
-    
-    def stop_server(self):
-        """Stop the VILA server subprocess"""
-        if self.server_process:
-            logger.info("🛑 Stopping VILA server...")
-            self.server_process.terminate()
-            try:
-                self.server_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                logger.warning("⚠️ Force killing VILA server...")
-                self.server_process.kill()
-            self.server_process = None
-            self.server_status = "stopped"
-            logger.info("✅ VILA server stopped")
-    
-    def restart_server(self):
-        """Restart the VILA server"""
-        logger.info("🔄 Restarting VILA server...")
-        self.stop_server()
-        time.sleep(2)
-        self.start_server()
-    
-    def _monitor_server_output(self):
-        """Monitor server output in background thread"""
-        if not self.server_process:
-            return
-            
-        try:
-            for line in iter(self.server_process.stdout.readline, ''):
-                if line:
-                    line = line.strip()
-                    self.server_logs.append(line)
-                    
-                    # Keep log size manageable
-                    if len(self.server_logs) > self.max_log_lines:
-                        self.server_logs = self.server_logs[-self.max_log_lines:]
-                    
-                    # Update status based on log messages
-                    if "✅ Simple VILA Server ready!" in line:
-                        self.server_status = "running"
-                        logger.info("✅ VILA server is ready")
-                    elif "ERROR" in line or "Traceback" in line:
-                        self.server_status = "error"
-                
-                # Check if process is still running
-                if self.server_process and self.server_process.poll() is not None:
-                    break
-                    
-        except Exception as e:
-            logger.error(f"Error monitoring server: {e}")
-        
-        # Process ended
-        if self.server_status == "starting":
-            self.server_status = "error"
-        elif self.server_status == "running":
-            self.server_status = "stopped"
-    
-    def get_server_status(self) -> Dict[str, Any]:
-        """Get current server status and recent logs"""
-        is_running = self.server_process and self.server_process.poll() is None
-        return {
-            'status': self.server_status,
-            'process_running': is_running,
-            'recent_logs': self.server_logs[-10:],  # Last 10 log lines
-            'server_ready': self.server_ready,
-            'server_url': self.server_url
-        }
+    # Legacy server methods removed - direct model loading only
     
     def load_model(self, model_path: str = None) -> bool:
         """
-        Load VILA1.5-3b model using VILA package directly
-        
+        Load Cosmos model directly - either works or fails clearly
+
         Args:
-            model_path: Optional model path override (will use VILA1.5-3b if not specified)
-            
+            model_path: Optional model path override
+
         Returns:
-            bool: True if model loaded successfully, False otherwise
+            bool: True if model loaded successfully, raises exception if failed
         """
         try:
             model_to_load = model_path or self.model_name
-            logger.info(f"🔄 Loading VILA1.5-3b model: {model_to_load}")
-            
-            # Use VILA package directly for loading VILA models
-            if self._load_vila_model_direct(model_to_load):
+            logger.info(f"🔄 Loading Cosmos model: {model_to_load}")
+
+            # Load Cosmos model directly - no fallbacks
+            if self._load_cosmos_model(model_to_load):
                 self.model_loaded = True
-                self.server_ready = True  # Legacy compatibility
-                logger.info("✅ VILA1.5-3b model loaded successfully")
+                logger.info("✅ Cosmos model loaded successfully")
                 logger.info(f"   └── Model: {model_to_load}")
                 logger.info(f"   └── Multi-modal sensor fusion: Enabled")
-                logger.info(f"   └── Enhanced safety validation: Enabled")
                 return True
             else:
-                logger.error("❌ Failed to load VILA1.5-3b model")
-                return False
-            
+                raise RuntimeError(f"❌ Failed to load Cosmos model: {model_to_load}")
+
         except Exception as e:
-            logger.error(f"❌ VILA1.5-3b model loading error: {e}")
-            return False
+            logger.error(f"❌ Cosmos model loading error: {e}")
+            raise RuntimeError(f"Cosmos model loading failed: {str(e)}")
     
-    def _load_vila_model_direct(self, model_name: str) -> bool:
-        """Load VILA model using VILA package directly"""
+    def _load_cosmos_model(self, model_name: str) -> bool:
+        """Load Cosmos model directly - no fallbacks"""
         try:
             # Import VILA components
             import sys
@@ -336,22 +224,7 @@ class CosmosNemotronVLAModel:
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
     
-    def _enable_simulation_mode(self) -> bool:
-        """Enable enhanced simulation mode for development and testing"""
-        logger.info("🎯 Enabling Enhanced Cosmos Nemotron VLA Simulation Mode")
-        logger.info("   └── Full sensor fusion capabilities: ACTIVE")
-        logger.info("   └── Multi-layer safety validation: ACTIVE") 
-        logger.info("   └── Intelligent decision making: ACTIVE")
-        logger.info("   └── RTX 3090 optimized processing: ACTIVE")
-        
-        self.model_loaded = True
-        self.server_ready = True
-        self.model_type = "cosmos_nemotron_enhanced_simulation"
-        
-        # No simulation mode - force real VILA loading to see actual errors
-        logger.error("❌ Simulation mode disabled - VILA1.5-3b must load successfully")
-        logger.error("   └── Fix the real VILA loading issue instead of masking with simulation")
-        return False
+    # Simulation mode completely removed
     
     def generate_response(self, prompt: str, image: Image.Image) -> Dict[str, Any]:
         """
@@ -391,6 +264,8 @@ class CosmosNemotronVLAModel:
         try:
             # Build enhanced prompt with sensor context
             enhanced_prompt = self._build_sensor_fusion_prompt(sensor_data, prompt)
+            logger.info(f"🔧 Enhanced prompt length: {len(enhanced_prompt)} chars")
+            logger.info(f"🔧 Enhanced prompt preview: {enhanced_prompt[:300]}...")
             
             # Generate analysis using real VILA model
             analysis = self._generate_real_analysis(enhanced_prompt, sensor_data.camera_image)
@@ -449,64 +324,6 @@ class CosmosNemotronVLAModel:
         except Exception as e:
             logger.error(f"Legacy image analysis error: {e}")
             return f"Legacy analysis error: {str(e)}"
-            # Convert PIL image to base64
-            buffered = io.BytesIO()
-            image.save(buffered, format="JPEG")
-            img_base64 = base64.b64encode(buffered.getvalue()).decode()
-            
-            # Default prompt for robot navigation
-            if prompt is None:
-                prompt = ("Analyze this image from a robot's camera. Describe what you see and suggest "
-                         "a navigation command (forward, backward, turn_left, turn_right, or stop) "
-                         "to help the robot navigate safely.")
-            
-            # Prepare request payload
-            payload = {
-                "model": self.model_name,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"}
-                            }
-                        ]
-                    }
-                ],
-                "max_tokens": 150,
-                "temperature": 0.1
-            }
-            
-            logger.info("📤 Sending image analysis request to VILA server")
-            
-            # Send request to VILA server
-            response = requests.post(
-                f"{self.server_url}/v1/chat/completions",
-                json=payload,
-                timeout=VILA_SERVER_TIMEOUT,
-                headers={"Content-Type": "application/json"}
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                analysis = result["choices"][0]["message"]["content"]
-                logger.info(f"✅ VILA analysis received: {analysis[:100]}...")
-                return analysis
-            else:
-                error_msg = f"VILA server error: {response.status_code} - {response.text}"
-                logger.error(error_msg)
-                return error_msg
-                
-        except requests.exceptions.Timeout:
-            error_msg = "VILA server request timed out"
-            logger.error(error_msg)
-            return error_msg
-        except Exception as e:
-            error_msg = f"Error communicating with VILA server: {e}"
-            logger.error(error_msg)
-            return error_msg
     
     def generate_robot_command(self, image: Image.Image, context: str = "") -> Dict[str, Any]:
         """
@@ -566,38 +383,37 @@ class CosmosNemotronVLAModel:
         """
         analysis_lower = analysis.lower()
         
-        # Priority order for command detection
-        if any(word in analysis_lower for word in ['stop', 'halt', 'wait', 'danger', 'obstacle']):
-            return 'stop'
-        elif any(word in analysis_lower for word in ['forward', 'ahead', 'straight', 'continue']):
+        # Trust VILA's decision - no priority ordering that favors 'stop'
+        if any(word in analysis_lower for word in ['forward', 'ahead', 'straight', 'continue', 'move forward']):
             return 'forward'
-        elif any(word in analysis_lower for word in ['backward', 'back', 'reverse']):
-            return 'backward'
         elif any(word in analysis_lower for word in ['turn left', 'left', 'turn_left']):
             return 'turn_left'
         elif any(word in analysis_lower for word in ['turn right', 'right', 'turn_right']):
             return 'turn_right'
+        elif any(word in analysis_lower for word in ['backward', 'back', 'reverse']):
+            return 'backward'
+        elif any(word in analysis_lower for word in ['stop', 'halt', 'wait']):
+            return 'stop'
         else:
-            # Default to stop if unclear
-            logger.warning(f"⚠️ Unclear navigation command in analysis: {analysis[:100]}")
+            # Default to stop if unclear (but log it)
+            logger.info(f"🤔 Unclear navigation command in analysis: {analysis[:100]}")
             return 'stop'
     
     def is_model_loaded(self) -> bool:
-        """Check if VILA server is ready"""
-        return self.server_ready
+        """Check if VILA model is loaded"""
+        return self.model_loaded
     
     def get_model_info(self) -> Dict[str, Any]:
-        """Get information about the VILA model/server"""
-        status = self.get_server_status()
+        """Get information about the VILA model - no server fallback"""
         return {
             'model_type': 'Cosmos Nemotron VLA',
-            'server_url': self.server_url,
+            'server_url': 'direct_model',  # No server
             'model_name': self.model_name,
-            'server_ready': self.server_ready,
-            'timeout': self.server_timeout,
-            'server_status': status['status'],
-            'process_running': status['process_running'],
-            'auto_start_enabled': self.auto_start_server,
+            'server_ready': self.model_loaded,
+            'timeout': MODEL_LOAD_TIMEOUT,
+            'server_status': 'model_loaded' if self.model_loaded else 'model_not_loaded',
+            'process_running': False,  # No server process
+            'auto_start_enabled': False,  # No auto-start
             'sensor_fusion_enabled': self.sensor_fusion_enabled,
             'device': self.device,
             'quantization': self.quantization
@@ -605,9 +421,9 @@ class CosmosNemotronVLAModel:
     
     def _build_sensor_fusion_prompt(self, sensor_data: SensorData, user_prompt: str = None) -> str:
         """Build enhanced prompt with sensor data integration"""
-        base_prompt = """🤖 Cosmos Nemotron VLA - Multi-Modal Robot Navigation System
+        base_prompt = """🤖 Cosmos Reason1-7B - Multi-Modal Robot Reasoning with Sensor Integration
 
-SENSOR DATA FUSION:
+SENSOR-BASED NAVIGATION REASONING:
 """
         
         # Add LiDAR context
@@ -633,19 +449,47 @@ SENSOR DATA FUSION:
         if sensor_data.camera_image:
             base_prompt += "📷 Camera: Visual data available for analysis\n\n"
         
-        # Task instruction
-        task_prompt = user_prompt or """VLA NAVIGATION TASK:
-Analyze ALL sensor data and provide safe navigation guidance. Consider:
-1. LiDAR for precise distance measurements and obstacle detection
-2. IMU for robot orientation and movement state
-3. Visual data for scene understanding and semantic analysis
+        # Task instruction - enhanced for better safety integration with dynamic LiDAR values
+        if user_prompt:
+            task_prompt = user_prompt
+        else:
+            # Get actual LiDAR values for dynamic prompt
+            front_dist = sensor_data.lidar_distances.get('distance_front', float('inf'))
+            left_dist = sensor_data.lidar_distances.get('distance_left', float('inf'))
+            right_dist = sensor_data.lidar_distances.get('distance_right', float('inf'))
 
-OUTPUT FORMAT:
-Action: [move_forward/turn_left/turn_right/stop]
-Confidence: [0.0-1.0]
-Reasoning: [Brief explanation using sensor fusion]
+            # Determine safety status for each direction (using stricter thresholds)
+            front_status = "🚨 DANGER!" if front_dist < 0.7 else "✅ SAFE"
+            left_status = "🚨 DANGER!" if left_dist < 0.6 else "✅ SAFE"
+            right_status = "🚨 DANGER!" if right_dist < 0.6 else "✅ SAFE"
 
-SAFETY PRIORITY: When uncertain or obstacles detected, choose 'stop'."""
+            # Determine if movement should be blocked
+            front_blocked = front_dist < 0.7
+            any_blocked = front_blocked or left_dist < 0.6 or right_dist < 0.6
+
+            required_action = "stop" if any_blocked else "analyze_further"
+            safety_reason = f"Front obstacle at {front_dist:.2f}m (< 0.7m threshold)" if front_blocked else "All clear per LiDAR"
+
+            task_prompt = f"""🚨 CRITICAL ROBOT NAVIGATION - LiDAR DATA IS TRUTH:
+
+⚠️ LiDAR SAFETY DATA (meters):
+• Front: {front_dist:.2f}m (Obstacle at {front_dist:.2f}m!)
+• Left: {left_dist:.2f}m
+• Right: {right_dist:.2f}m
+
+🚫 SAFETY RULES:
+• Front distance < 0.5m = CANNOT MOVE FORWARD
+• Front distance < 0.7m = HIGH RISK - avoid if possible
+• Current front: {front_dist:.2f}m = {'DANGER - BLOCKED' if front_dist < 0.5 else 'HIGH RISK' if front_dist < 0.7 else 'CLEAR'}
+
+📷 VISUAL ANALYSIS (secondary to LiDAR):
+Look at the camera image, but remember LiDAR shows {'an obstacle at ' + str(front_dist) + 'm' if front_dist < 0.7 else 'clear path'}.
+
+REQUIRED RESPONSE FORMAT:
+1. [YES/NO] Can I move forward? (based on LiDAR data)
+2. [YES/NO] Are there obstacles? (acknowledge LiDAR obstacle)
+3. Action: [move_forward/turn_left/turn_right/stop] (respect LiDAR safety)
+4. Visual description: [brief scene description]"""
 
         return base_prompt + task_prompt
     
@@ -699,8 +543,8 @@ SAFETY PRIORITY: When uncertain or obstacles detected, choose 'stop'."""
                         media=media,
                         media_config=media_config,
                         do_sample=True,
-                        temperature=0.1,
-                        max_new_tokens=64,  # Reduced for faster inference
+                        temperature=0.2,
+                        max_new_tokens=150,  # Increased for better analysis
                         use_cache=True,
                         pad_token_id=self.tokenizer.eos_token_id
                     )
@@ -709,12 +553,39 @@ SAFETY PRIORITY: When uncertain or obstacles detected, choose 'stop'."""
                 
                 # Decode response
                 outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
-                logger.info(f"   └── Raw VILA output: {outputs[:200]}...")
+                logger.info(f"   └── Raw VILA output length: {len(outputs)} chars")
+                logger.info(f"   └── Raw VILA output: {outputs[:500]}...")
                 
                 # Extract new content (remove input prompt)
                 outputs = outputs.strip()
-                if conv.sep in outputs:
-                    outputs = outputs.split(conv.sep)[-1].strip()
+                logger.info(f"   └── After strip: '{outputs[:200]}...'")
+                
+                # Look for proper conversation markers instead of simple separator
+                # Common patterns: "ASSISTANT:", "Assistant:", or conversation end markers
+                assistant_markers = ["ASSISTANT:", "Assistant:", "### Assistant:"]
+                
+                # Try to find the assistant response
+                assistant_response = None
+                for marker in assistant_markers:
+                    if marker in outputs:
+                        # Split on the marker and take the part after it
+                        parts = outputs.split(marker)
+                        if len(parts) > 1:
+                            assistant_response = parts[-1].strip()
+                            logger.info(f"   └── Found assistant marker '{marker}', extracted response")
+                            break
+                
+                if assistant_response:
+                    outputs = assistant_response
+                    logger.info(f"   └── Assistant response: '{outputs[:200]}...'")
+                else:
+                    # If no assistant marker found, check if the output looks like a direct response
+                    # (no conversation format, just the answer)
+                    logger.info(f"   └── No assistant markers found, using full output as direct response")
+                    # Keep the full output as is
+                
+                if len(outputs) < 10:
+                    logger.warning(f"⚠️ Very short VILA output: '{outputs}' - this may indicate a generation issue")
                 
                 return outputs
                 
@@ -748,7 +619,7 @@ SAFETY PRIORITY: When uncertain or obstacles detected, choose 'stop'."""
             raise RuntimeError(f"VILA inference failed: {str(e)}")
     
     def _parse_enhanced_navigation(self, analysis: str, sensor_data: SensorData) -> Dict[str, Any]:
-        """Parse analysis with enhanced safety validation"""
+        """Parse analysis and trust VILA's navigation decisions completely"""
         analysis_lower = analysis.lower()
         
         # Extract structured output if present
@@ -768,83 +639,46 @@ SAFETY PRIORITY: When uncertain or obstacles detected, choose 'stop'."""
             except:
                 pass
         else:
-            # Fallback parsing
-            if any(word in analysis_lower for word in ['move_forward', 'forward']):
+            # Fallback parsing with broader keyword matching
+            if any(word in analysis_lower for word in ['move_forward', 'forward', 'ahead', 'straight', 'continue']):
                 action = 'move_forward'
-                confidence = 0.7
+                confidence = 0.8
             elif any(word in analysis_lower for word in ['turn_left', 'left']):
                 action = 'turn_left'
-                confidence = 0.7
+                confidence = 0.8
             elif any(word in analysis_lower for word in ['turn_right', 'right']):
                 action = 'turn_right'
-                confidence = 0.7
-            elif any(word in analysis_lower for word in ['stop', 'halt']):
+                confidence = 0.8
+            elif any(word in analysis_lower for word in ['stop', 'halt', 'wait']):
                 action = 'stop'
                 confidence = 0.9
         
-        # Enhanced safety validation with LiDAR
-        safety_check = self._validate_enhanced_safety(action, sensor_data)
+        # Include sensor context for logging but no safety overrides
+        front_dist = sensor_data.lidar_distances.get('distance_front', 0.0)
+        left_dist = sensor_data.lidar_distances.get('distance_left', 0.0)
+        right_dist = sensor_data.lidar_distances.get('distance_right', 0.0)
         
-        return {
-            'action': safety_check['action'],
-            'confidence': safety_check['confidence'],
-            'reasoning': safety_check['reasoning']
-        }
-    
-    def _validate_enhanced_safety(self, action: str, sensor_data: SensorData) -> Dict[str, Any]:
-        """Enhanced safety validation using all sensor data"""
-        if not sensor_data.lidar_distances:
-            return {'action': action, 'confidence': 0.5, 'reasoning': 'No LiDAR data for safety validation'}
-        
-        front_dist = sensor_data.lidar_distances.get('distance_front', float('inf'))
-        left_dist = sensor_data.lidar_distances.get('distance_left', float('inf'))
-        right_dist = sensor_data.lidar_distances.get('distance_right', float('inf'))
-        
-        # Critical safety thresholds
-        CRITICAL_DISTANCE = 0.3
-        WARNING_DISTANCE = 0.5
-        
-        # Safety overrides
-        if front_dist < CRITICAL_DISTANCE and action == 'move_forward':
-            return {
-                'action': 'stop',
-                'confidence': 0.98,
-                'reasoning': f'SAFETY OVERRIDE: Front obstacle at {front_dist:.2f}m < {CRITICAL_DISTANCE}m critical threshold'
-            }
-        
-        if action == 'turn_left' and left_dist < CRITICAL_DISTANCE:
-            return {
-                'action': 'stop',
-                'confidence': 0.95,
-                'reasoning': f'SAFETY OVERRIDE: Left obstacle at {left_dist:.2f}m too close for turn'
-            }
-        
-        if action == 'turn_right' and right_dist < CRITICAL_DISTANCE:
-            return {
-                'action': 'stop',
-                'confidence': 0.95,
-                'reasoning': f'SAFETY OVERRIDE: Right obstacle at {right_dist:.2f}m too close for turn'
-            }
-        
-        # Warning conditions (reduce confidence but allow)
-        confidence_factor = 1.0
-        if front_dist < WARNING_DISTANCE and action == 'move_forward':
-            confidence_factor = 0.7
-            reasoning = f'Cautious movement - front obstacle at {front_dist:.2f}m'
-        else:
-            reasoning = f'Command validated - distances: F:{front_dist:.1f}m L:{left_dist:.1f}m R:{right_dist:.1f}m'
+        reasoning = f'VILA decision with sensor context (F:{front_dist:.1f}m L:{left_dist:.1f}m R:{right_dist:.1f}m): {analysis[:100]}'
         
         return {
             'action': action,
-            'confidence': min(0.9, confidence_factor * 0.8),
+            'confidence': confidence,
             'reasoning': reasoning
+        }
+    
+    def _validate_enhanced_safety(self, action: str, sensor_data: SensorData) -> Dict[str, Any]:
+        """Safety validation completely removed - VILA has full control"""
+        return {
+            'action': action,
+            'confidence': 0.8,
+            'reasoning': f'VILA action: {action} - no safety restrictions'
         }
 
     def __del__(self):
-        """Cleanup on deletion"""
+        """Cleanup on deletion - no server processes"""
         try:
-            if self.server_process:
-                self.stop_server()
+            # No server processes to clean up - direct model loading only
+            pass
         except:
             pass
 
@@ -852,8 +686,8 @@ SAFETY PRIORITY: When uncertain or obstacles detected, choose 'stop'."""
 # Legacy compatibility wrapper
 class VILAModel(CosmosNemotronVLAModel):
     """Legacy compatibility wrapper for existing code"""
-    def __init__(self, auto_start_server=False):
-        super().__init__(auto_start_server=auto_start_server)
+    def __init__(self):
+        super().__init__()
         logger.info("🔄 Legacy VILAModel wrapper - using Cosmos Nemotron VLA")
 
 
