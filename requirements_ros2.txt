@@ -1,5 +1,4 @@
 # ROS2 Robot System Requirements
-# Updated requirements file with HTTP dependencies removed
 
 # Python packages for ROS2 system
 rclpy>=3.3.0              # ROS2 Python client library
