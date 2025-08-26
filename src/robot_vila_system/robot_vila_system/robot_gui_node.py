@@ -1814,7 +1814,13 @@ SAFETY FIRST: LiDAR shows obstacle - do not ignore sensor data.""",
             # Keep native size for camera feed (640x480 or scale to fit frame)
             display_image = pil_image.copy()
             # Scale to fit the camera frame while maintaining aspect ratio
-            display_image.thumbnail((420, 350), Image.Resampling.LANCZOS)
+            # Handle PIL version compatibility
+            try:
+                # PIL 10.0.0+
+                display_image.thumbnail((420, 350), Image.Resampling.LANCZOS)
+            except AttributeError:
+                # PIL < 10.0.0
+                display_image.thumbnail((420, 350), Image.LANCZOS)
             
             # Convert to Tkinter PhotoImage
             photo = ImageTk.PhotoImage(display_image)

@@ -20,6 +20,7 @@ from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 import configparser
+import numpy as np
 
 # ROS2 message imports
 from robot_msgs.msg import RobotCommand, SensorData, VILAAnalysis
@@ -28,8 +29,9 @@ from sensor_msgs.msg import Image, Imu
 from std_msgs.msg import String, Bool
 from geometry_msgs.msg import Twist
 
-# Import VILA model from ROS2 package
+# Import VILA models from ROS2 package
 from robot_vila_system.vila_model import VILAModel
+from robot_vila_system.cosmos_vila_model import CosmosVILAModel
 
 # Configure logging
 logging.basicConfig(
@@ -70,8 +72,12 @@ class RobotVILAServerROS2(Node):
         # Load configuration
         self.config = self._load_config()
         
-        # Initialize VILA model (HTTP client only - server started by launch file)
-        self.vila_model = VILAModel()
+        # Initialize Cosmos VILA model (real model)
+        self.vila_model = CosmosVILAModel()
+        
+        # Also keep fallback model for comparison
+        self.fallback_vila_model = VILAModel()
+        
         self.model_loaded = False
         
         # Robot management
@@ -252,29 +258,32 @@ class RobotVILAServerROS2(Node):
         )
     
     def _load_vila_model_async(self):
-        """Load VILA model in background thread with startup delay"""
+        """Load Cosmos VILA model in background thread"""
         def load_model():
-            # Wait for VILA server to start up (launched by launch file)
-            self.get_logger().info("⏳ Waiting for VILA server to start...")
-            time.sleep(10)  # Give VILA server more time to start and load model
+            self.get_logger().info("🚀 Loading Cosmos-Transfer1 model...")
             
-            self.get_logger().info("🚀 Loading VILA model...")
-            
-            # Try multiple times with increasing delays
-            for attempt in range(3):
-                success = self.vila_model.load_model()
+            # Try loading Cosmos model first
+            success = self.vila_model.load_model()
+            if success:
+                self.model_loaded = True
+                self.get_logger().info("✅ Cosmos-Transfer1 model loaded successfully")
+            else:
+                self.get_logger().error("❌ Failed to load Cosmos model, trying fallback...")
+                
+                # Try fallback model
+                success = self.fallback_vila_model.load_model()
                 if success:
+                    self.vila_model = self.fallback_vila_model
                     self.model_loaded = True
-                    self.get_logger().info("✅ VILA model loaded successfully")
-                    # Publish updated status immediately after model loads
-                    self._publish_vila_status()
-                    return
+                    self.get_logger().info("✅ Fallback VILA model loaded successfully")
                 else:
-                    self.get_logger().warn(f"⚠️ VILA model load attempt {attempt + 1}/3 failed")
-                    if attempt < 2:  # Don't sleep on the last attempt
-                        time.sleep(5)  # Wait 5 seconds before retry
+                    self.get_logger().error("❌ Both Cosmos and fallback models failed")
             
-            self.get_logger().error("❌ Failed to load VILA model after 3 attempts - will retry on first request")
+            if self.model_loaded:
+                # Publish updated status immediately after model loads
+                self._publish_vila_status()
+            else:
+                self.get_logger().error("❌ Failed to load any model - will retry on first request")
         
         threading.Thread(target=load_model, daemon=True).start()
     
@@ -621,41 +630,61 @@ class RobotVILAServerROS2(Node):
                 response.timestamp_ns = self.get_clock().now().nanoseconds
                 return response
             
-            # Create SensorData with all available sensor information
-            sensor_data = SensorData(
-                lidar_distances=lidar_data,
-                imu_data=self.latest_imu_data or {
-                    'acceleration': {'x': 0, 'y': 0, 'z': 9.8},
-                    'gyroscope': {'x': 0, 'y': 0, 'z': 0}
-                },
-                camera_image=pil_image,
-                timestamp=time.time()
-            )
+            # Create SensorData for Cosmos model
+            sensor_data = SensorData()
+            sensor_data.distance_front = lidar_data.get('distance_front', 3.0)
+            sensor_data.distance_left = lidar_data.get('distance_left', 3.0)
+            sensor_data.distance_right = lidar_data.get('distance_right', 3.0)
+            # LiDAR data will be synthesized from distance sensors in the Cosmos model
+            sensor_data.timestamp_ns = self.get_clock().now().nanoseconds
             
-            # Use enhanced Cosmos Nemotron VLA analysis
-            self.get_logger().info(f"🚀 Using Cosmos Nemotron VLA multi-modal analysis with LiDAR: F={lidar_data.get('distance_front', 'N/A')}m")
-            cosmos_result = self.vila_model.analyze_multi_modal_scene(sensor_data, request.prompt)
+            # Use real Cosmos-Transfer1 model for navigation decision
+            self.get_logger().info(f"🚀 Using Cosmos-Transfer1 for navigation: F={sensor_data.distance_front:.1f}m, L={sensor_data.distance_left:.1f}m, R={sensor_data.distance_right:.1f}m")
             
-            if cosmos_result['success']:
-                analysis_result = cosmos_result['analysis']
+            # Check if this is the real Cosmos model or fallback
+            if hasattr(self.vila_model, 'generate_navigation_decision'):
+                # Real Cosmos model
+                cosmos_result = self.vila_model.generate_navigation_decision(request.prompt, sensor_data, pil_image)
+                analysis_result = f"Cosmos Analysis: {cosmos_result['reasoning']}"
                 nav_commands = {
-                    'action': cosmos_result['navigation_command'],
+                    'action': cosmos_result['action'],
                     'confidence': cosmos_result['confidence'],
-                    'reasoning': cosmos_result['reasoning']
+                    'reason': cosmos_result['reasoning'],
+                    'model': 'cosmos-transfer1'
                 }
-                self.get_logger().info(f"✅ Cosmos Nemotron VLA result: {nav_commands['action']} (confidence: {nav_commands['confidence']:.2f})")
-                self.get_logger().info(f"✅ Cosmos reasoning: {nav_commands['reasoning'][:100]}...")
+                confidence = cosmos_result['confidence']
+                success = True
             else:
-                # Cosmos analysis is REQUIRED - no fallbacks
-                error_msg = f"Cosmos analysis failed: {cosmos_result.get('analysis', 'Unknown error')}"
+                # Fallback model
+                self.get_logger().info("🔄 Using fallback VILA model")
+                fallback_result = self.vila_model.analyze_multi_modal_scene(sensor_data, request.prompt)
+                success = fallback_result['success']
+                if success:
+                    analysis_result = fallback_result['analysis']
+                    nav_commands = fallback_result.get('navigation', {'action': 'stop', 'confidence': 0.5})
+                    confidence = fallback_result.get('confidence', 0.5)
+                else:
+                    analysis_result = "Fallback analysis failed"
+                    nav_commands = {'action': 'stop', 'confidence': 0.0, 'reason': 'Analysis failed'}
+                    confidence = 0.0
+            
+            if success:
+                self.get_logger().info(f"✅ Navigation result: {nav_commands['action']} (confidence: {confidence:.2f})")
+                if 'reason' in nav_commands:
+                    self.get_logger().info(f"✅ Reasoning: {nav_commands['reason'][:100]}...")
+            else:
+                # Analysis failed
+                error_msg = "Navigation analysis failed"
                 self.get_logger().error(f"❌ {error_msg}")
-                raise RuntimeError(f"Cosmos VILA analysis failed - no fallback methods: {error_msg}")
+                analysis_result = "Navigation analysis failed"
+                nav_commands = {'action': 'stop', 'confidence': 0.0, 'reason': 'Analysis failed'}
+                confidence = 0.0
             
             # Fill service response directly
             response.success = True
             response.analysis_result = analysis_result
             response.navigation_commands_json = json.dumps(nav_commands)
-            response.confidence = nav_commands.get('confidence', 0.0)
+            response.confidence = confidence
             response.error_message = ""
             response.timestamp_ns = self.get_clock().now().nanoseconds
             

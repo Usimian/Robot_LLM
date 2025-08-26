@@ -34,6 +34,7 @@ setup(
             'vila_server_node.py = robot_vila_system.vila_server_node:main',
             'robot_gui_node.py = robot_vila_system.robot_gui_node:main',
             'gateway_validator_node.py = robot_vila_system.gateway_validator_node:main',
+            'cosmos_transfer1_node.py = robot_vila_system.cosmos_transfer1_node:main',
         ],
     },
 )
