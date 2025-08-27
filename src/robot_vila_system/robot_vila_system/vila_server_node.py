@@ -573,13 +573,12 @@ class RobotVILAServerROS2(Node):
             }
             
             # Convert to SensorData for enhanced Cosmos Nemotron VLA analysis
-            from robot_vila_system.vila_model import SensorData
-            from cv_bridge import CvBridge
+            # Use ROS2 SensorData message, not the vila_model SensorData class
+            # from cv_bridge import CvBridge  # Removed to avoid NumPy compatibility issues
             from PIL import Image as PILImage
-            import cv2
+            import numpy as np
             
-            # Convert ROS image to PIL for Cosmos Nemotron VLA with proper validation
-            bridge = CvBridge()
+            # Convert ROS image to PIL for Cosmos Nemotron VLA with proper validation (no cv_bridge)
             encoding = image_to_analyze.encoding if image_to_analyze.encoding else "bgr8"
             
             # Validate image data before processing
@@ -596,7 +595,18 @@ class RobotVILAServerROS2(Node):
             self.get_logger().debug(f"🖼️ Converting image: {image_to_analyze.width}x{image_to_analyze.height}, encoding: {encoding}, data size: {len(image_to_analyze.data)} bytes")
             
             try:
-                cv_image = bridge.imgmsg_to_cv2(image_to_analyze, encoding)
+                # Direct conversion from ROS Image to numpy array (no cv_bridge)
+                np_image = np.frombuffer(image_to_analyze.data, dtype=np.uint8)
+                
+                if encoding == "rgb8":
+                    cv_image = np_image.reshape((image_to_analyze.height, image_to_analyze.width, 3))
+                elif encoding == "bgr8":
+                    bgr_image = np_image.reshape((image_to_analyze.height, image_to_analyze.width, 3))
+                    # Convert BGR to RGB by swapping channels
+                    cv_image = bgr_image[:, :, ::-1]  # Reverse channel order for RGB
+                else:
+                    self.get_logger().warning(f"Unsupported encoding {encoding}, assuming RGB8")
+                    cv_image = np_image.reshape((image_to_analyze.height, image_to_analyze.width, 3))
                 
                 # Validate converted image
                 if cv_image is None or cv_image.size == 0:
@@ -605,14 +615,9 @@ class RobotVILAServerROS2(Node):
                 
                 self.get_logger().debug(f"✅ OpenCV image shape: {cv_image.shape}")
                 
-                # Convert color space with validation
+                # Image is already in RGB format from our conversion above
                 if len(cv_image.shape) == 3 and cv_image.shape[2] == 3:
-                    if encoding == "rgb8":
-                        # Image is already RGB, no conversion needed
-                        rgb_image = cv_image
-                    else:
-                        # Convert BGR to RGB
-                        rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
+                    rgb_image = cv_image  # Already RGB from our direct conversion
                 else:
                     self.get_logger().error(f"❌ Unexpected image shape: {cv_image.shape}")
                     raise ValueError(f"Unexpected image shape: {cv_image.shape}")
@@ -630,12 +635,16 @@ class RobotVILAServerROS2(Node):
                 response.timestamp_ns = self.get_clock().now().nanoseconds
                 return response
             
-            # Create SensorData for Cosmos model
+            # Create SensorData for Cosmos model (using ROS2 message)
             sensor_data = SensorData()
+            sensor_data.robot_id = "yahboomcar_x3_01" 
             sensor_data.distance_front = lidar_data.get('distance_front', 3.0)
             sensor_data.distance_left = lidar_data.get('distance_left', 3.0)
             sensor_data.distance_right = lidar_data.get('distance_right', 3.0)
-            # LiDAR data will be synthesized from distance sensors in the Cosmos model
+            sensor_data.battery_voltage = 12.0  # Default values
+            sensor_data.cpu_temp = 45.0
+            sensor_data.cpu_usage = 25.0
+            sensor_data.camera_status = "active"
             sensor_data.timestamp_ns = self.get_clock().now().nanoseconds
             
             # Use real Cosmos-Transfer1 model for navigation decision

@@ -533,16 +533,16 @@ REQUIRED RESPONSE FORMAT:
                 try:
                     # Process image using the processor
                     inputs = self.image_processor(
-                        images=image, 
-                        text=prompt_text, 
+                        images=image,
+                        text=prompt_text,
                         return_tensors="pt"
                     )
-                    
+
                     # Move to device
                     inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-                    
+
                     logger.info("   └── Starting Cosmos generation...")
-                    
+
                     with torch.inference_mode():
                         output_ids = self.model.generate(
                             **inputs,
@@ -552,14 +552,14 @@ REQUIRED RESPONSE FORMAT:
                             use_cache=True,
                             pad_token_id=self.tokenizer.eos_token_id
                         )
-                    
-                    logger.info("   └── Cosmos generation completed")
+
+                        logger.info("   └── Cosmos generation completed")
                     
                 except Exception as e:
                     logger.error(f"   └── Cosmos multimodal inference failed: {e}")
                     # Fallback to text-only
                     inputs = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
-                    
+
                     with torch.inference_mode():
                         output_ids = self.model.generate(
                             **inputs,
@@ -568,7 +568,7 @@ REQUIRED RESPONSE FORMAT:
                             temperature=0.2,
                             pad_token_id=self.tokenizer.eos_token_id
                         )
-                
+
                 # Decode response
                 outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
                 logger.info(f"   └── Raw VILA output length: {len(outputs)} chars")

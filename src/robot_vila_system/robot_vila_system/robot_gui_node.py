@@ -32,7 +32,7 @@ from robot_msgs.msg import RobotCommand, SensorData, VILAAnalysis
 from robot_msgs.srv import ExecuteCommand, RequestVILAAnalysis
 from sensor_msgs.msg import Image as RosImage, Imu
 from std_msgs.msg import String, Bool
-from cv_bridge import CvBridge
+# from cv_bridge import CvBridge  # Removed to avoid NumPy compatibility issues
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -46,7 +46,7 @@ class RobotGUIROS2Node(Node):
         
         self.gui_callback = gui_callback
         self.robot_id = "yahboomcar_x3_01"  # Hardcoded for single robot system
-        self.bridge = CvBridge()
+        # self.bridge = CvBridge()  # Removed cv_bridge dependency
         self.last_vila_update = None  # Track VILA model activity
         self.latest_imu_data = None  # Store latest IMU data
         self.current_camera_image = None  # Store current camera image for VILA requests
@@ -248,17 +248,27 @@ class RobotGUIROS2Node(Node):
             # Check encoding - default to bgr8 if empty, but handle rgb8 from robot
             encoding = msg.encoding if msg.encoding else "bgr8"
             
-            # Convert ROS image to OpenCV
-            if encoding == "rgb8":
-                cv_image = self.bridge.imgmsg_to_cv2(msg, "rgb8")
-                # Convert RGB to BGR for OpenCV
-                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2BGR)
-            else:
-                cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            # Convert ROS image directly to PIL (no cv_bridge needed)
+            import numpy as np
             
-            # Convert to PIL Image for GUI
-            rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(rgb_image)
+            if encoding == "rgb8":
+                # Direct conversion for RGB8
+                np_image = np.frombuffer(msg.data, dtype=np.uint8)
+                rgb_array = np_image.reshape((msg.height, msg.width, 3))
+                pil_image = Image.fromarray(rgb_array, 'RGB')
+            elif encoding == "bgr8":
+                # Direct conversion for BGR8, then convert to RGB
+                np_image = np.frombuffer(msg.data, dtype=np.uint8)
+                bgr_array = np_image.reshape((msg.height, msg.width, 3))
+                # Convert BGR to RGB by swapping channels
+                rgb_array = bgr_array[:, :, ::-1]  # Reverse the channel order
+                pil_image = Image.fromarray(rgb_array, 'RGB')
+            else:
+                # Fallback for other encodings - assume RGB8
+                self.get_logger().warning(f"Unsupported encoding {encoding}, assuming RGB8")
+                np_image = np.frombuffer(msg.data, dtype=np.uint8)
+                rgb_array = np_image.reshape((msg.height, msg.width, 3))
+                pil_image = Image.fromarray(rgb_array, 'RGB')
             
             # Send to GUI
             self.gui_callback('camera_image', pil_image)
@@ -1838,7 +1848,7 @@ SAFETY FIRST: LiDAR shows obstacle - do not ignore sensor data.""",
             import cv2
             import numpy as np
             from sensor_msgs.msg import Image as RosImage
-            from cv_bridge import CvBridge
+            # from cv_bridge import CvBridge  # Removed to avoid NumPy compatibility issues
             
             # Convert PIL to OpenCV format (RGB to BGR)
             cv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
@@ -1847,9 +1857,19 @@ SAFETY FIRST: LiDAR shows obstacle - do not ignore sensor data.""",
             # This ensures loaded images appear the same way as they do in the camera feed
             cv_image = cv2.flip(cv_image, 1)  # 1 = horizontal flip
             
-            # Convert to ROS Image
-            bridge = CvBridge()
-            ros_image = bridge.cv2_to_imgmsg(cv_image, "bgr8")
+            # Convert to ROS Image (direct conversion without cv_bridge)
+            from sensor_msgs.msg import Image as RosImage
+            import numpy as np
+            
+            # Create ROS Image message directly
+            ros_image = RosImage()
+            ros_image.header.stamp = self.get_clock().now().to_msg()
+            ros_image.header.frame_id = "camera_frame"
+            ros_image.height, ros_image.width, channels = cv_image.shape
+            ros_image.encoding = "bgr8"
+            ros_image.is_bigendian = False
+            ros_image.step = ros_image.width * channels
+            ros_image.data = cv_image.astype(np.uint8).tobytes()
             
             return ros_image
         except Exception as e:
