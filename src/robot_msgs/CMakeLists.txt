@@ -16,9 +16,7 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotCommand.msg"
   "msg/SensorData.msg"
-  "msg/VILAAnalysis.msg"
   "srv/ExecuteCommand.srv"
-  "srv/RequestVILAAnalysis.srv"
   DEPENDENCIES std_msgs sensor_msgs geometry_msgs
 )
 

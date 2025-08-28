@@ -13,25 +13,26 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         # Launch files
-        (os.path.join('share', package_name, 'launch'), 
+        (os.path.join('share', package_name, 'launch'),
          glob('launch/*.launch.py')),
-        # Config files  
-        (os.path.join('share', package_name, 'config'), 
-         glob('config/*.yaml')),
-        # VILA model files (if any)
-        (os.path.join('share', package_name, 'models'), 
-         glob('models/*') if os.path.exists('models') else []),
+        # Config files
+        (os.path.join('share', package_name, 'config'),
+         glob('config/*.yaml') if os.path.exists('config') else []),
+        # GUI component files
+        (os.path.join('share', package_name, 'robot_vila_system'),
+         ['robot_vila_system/gui_config.py',
+          'robot_vila_system/gui_utils.py',
+          'robot_vila_system/gui_components.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Robot Developer',
     maintainer_email='robot@example.com',
-    description='ROS2 VILA Robot System',
+    description='ROS2 Cosmos-Transfer1 Robot System',
     license='MIT',
 #    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'vila_server_node.py = robot_vila_system.vila_server_node:main',
             'robot_gui_node.py = robot_vila_system.robot_gui_node:main',
             'gateway_validator_node.py = robot_vila_system.gateway_validator_node:main',
             'cosmos_transfer1_node.py = robot_vila_system.cosmos_transfer1_node:main',

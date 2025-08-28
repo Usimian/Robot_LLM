@@ -1,5 +1,4 @@
 # ROS2 message for robot sensor data
-# Replaces HTTP-based sensor communication
 
 string robot_id
 float64 battery_voltage

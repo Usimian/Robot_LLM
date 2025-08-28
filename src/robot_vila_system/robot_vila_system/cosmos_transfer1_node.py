@@ -23,11 +23,11 @@ from PIL import Image
 import cv2
 
 # ROS2 message imports
-from robot_msgs.msg import RobotCommand, SensorData, VILAAnalysis
-from robot_msgs.srv import ExecuteCommand, RequestVILAAnalysis
+from robot_msgs.msg import RobotCommand, SensorData
+from robot_msgs.srv import ExecuteCommand
 from sensor_msgs.msg import Image as ROSImage
 from std_msgs.msg import String, Bool
-from cv_bridge import CvBridge
+# cv_bridge removed - using direct image processing
 
 # Configure logging
 logging.basicConfig(
@@ -66,8 +66,7 @@ class CosmosTransfer1Node(Node):
         self.processor = None
         self.model_loaded = False
         
-        # CV Bridge for image conversion
-        self.cv_bridge = CvBridge()
+        # Direct image processing (no cv_bridge needed for now)
         
         # Device setup
         self.device = self._setup_device()
@@ -114,44 +113,29 @@ class CosmosTransfer1Node(Node):
     
     def _setup_services(self):
         """Setup ROS2 services"""
-        # Main analysis service
+        # Cosmos-Transfer1 analysis service
         self.analysis_service = self.create_service(
-            RequestVILAAnalysis,
+            ExecuteCommand,
             '/cosmos/request_analysis',
             self._analysis_service_callback
         )
-        
-        # Legacy VILA compatibility service
-        self.vila_analysis_service = self.create_service(
-            RequestVILAAnalysis,
-            '/vila/request_analysis',
-            self._analysis_service_callback
-        )
-        
+
         self.get_logger().info("📡 Services configured:")
         self.get_logger().info("   └── /cosmos/request_analysis")
-        self.get_logger().info("   └── /vila/request_analysis (compatibility)")
     
     def _setup_publishers(self):
         """Setup ROS2 publishers"""
-        # Analysis results
+        # Cosmos analysis results
         self.analysis_publisher = self.create_publisher(
-            VILAAnalysis,
+            RobotCommand,
             '/cosmos/analysis',
             self.reliable_qos
         )
-        
+
         # Status updates
         self.status_publisher = self.create_publisher(
             String,
             '/cosmos/status',
-            self.reliable_qos
-        )
-        
-        # Legacy VILA compatibility
-        self.vila_analysis_publisher = self.create_publisher(
-            VILAAnalysis,
-            '/vila/analysis',
             self.reliable_qos
         )
     
@@ -226,71 +210,45 @@ class CosmosTransfer1Node(Node):
         threading.Thread(target=load_model, daemon=True).start()
     
     def _analysis_service_callback(self, request, response):
-        """Handle analysis requests"""
+        """Handle Cosmos analysis requests"""
         try:
             if not self.model_loaded:
                 response.success = False
-                response.error_message = "Cosmos model not loaded yet"
-                response.analysis_result = ""
-                response.navigation_commands_json = "{}"
-                response.confidence = 0.0
+                response.message = "Cosmos model not loaded yet"
                 response.timestamp_ns = self.get_clock().now().nanoseconds
                 return response
-            
-            self.get_logger().info(f"🔍 Cosmos analysis request: {request.prompt[:50]}...")
-            
-            # Convert ROS image to PIL
-            if not request.image.data:
-                response.success = False
-                response.error_message = "No image provided"
-                response.analysis_result = ""
-                response.navigation_commands_json = "{}"
-                response.confidence = 0.0
-                response.timestamp_ns = self.get_clock().now().nanoseconds
-                return response
-            
-            # Convert image
-            cv_image = self.cv_bridge.imgmsg_to_cv2(request.image, "rgb8")
-            pil_image = Image.fromarray(cv_image)
-            
-            # Perform analysis
-            analysis_result = self._analyze_scene(pil_image, request.prompt, {
-                'distance_front': request.distance_front,
-                'distance_left': request.distance_left,
-                'distance_right': request.distance_right
+
+            self.get_logger().info(f"🔍 Cosmos analysis request: {request.command_type}")
+
+            # For now, use basic analysis without image processing
+            # TODO: Integrate with actual Cosmos-Transfer1 model
+            analysis_result = self._analyze_scene(None, request.parameters, {
+                'distance_front': 1.0,  # Placeholder values
+                'distance_left': 1.0,
+                'distance_right': 1.0
             })
-            
+
             # Fill response
             response.success = analysis_result['success']
-            response.analysis_result = analysis_result.get('analysis', '')
-            response.navigation_commands_json = json.dumps(analysis_result.get('navigation_commands', {}))
-            response.confidence = analysis_result.get('confidence', 0.0)
-            response.error_message = analysis_result.get('error_message', '')
+            response.message = analysis_result.get('analysis', 'Analysis complete')
             response.timestamp_ns = self.get_clock().now().nanoseconds
             
-            # Publish analysis results
-            analysis_msg = VILAAnalysis()
-            analysis_msg.robot_id = request.robot_id
-            analysis_msg.prompt = request.prompt
-            analysis_msg.analysis_result = response.analysis_result
-            analysis_msg.navigation_commands_json = response.navigation_commands_json
-            analysis_msg.confidence = response.confidence
-            analysis_msg.success = response.success
-            analysis_msg.error_message = response.error_message
-            analysis_msg.timestamp_ns = response.timestamp_ns
-            
-            self.analysis_publisher.publish(analysis_msg)
-            self.vila_analysis_publisher.publish(analysis_msg)  # Compatibility
+            # Publish analysis results as RobotCommand
+            command_msg = RobotCommand()
+            command_msg.robot_id = request.robot_id
+            command_msg.command_type = "cosmos_analysis"
+            command_msg.parameters = response.analysis_result
+            command_msg.safety_confirmed = True
+            command_msg.timestamp_ns = response.timestamp_ns
+
+            self.analysis_publisher.publish(command_msg)
             
             self.get_logger().info(f"✅ Analysis complete: {analysis_result.get('navigation_commands', {}).get('action', 'unknown')}")
             
         except Exception as e:
             self.get_logger().error(f"❌ Analysis service error: {e}")
             response.success = False
-            response.error_message = str(e)
-            response.analysis_result = ""
-            response.navigation_commands_json = "{}"
-            response.confidence = 0.0
+            response.message = str(e)
             response.timestamp_ns = self.get_clock().now().nanoseconds
         
         return response

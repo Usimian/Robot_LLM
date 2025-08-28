@@ -1,5 +1,5 @@
 # ROS2 message for robot commands
-# Robot command message (flows through gateway only)
+# Robot command message (flows through single gateway)
 
 string robot_id                    # Target robot identifier
 string command_type                # "move", "turn", "stop"
