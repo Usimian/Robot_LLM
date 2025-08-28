@@ -242,19 +242,6 @@ class MovementControlPanel:
         )
         self.buttons['stop'].pack(fill=tk.X, pady=2)
 
-        # Safety control checkbox - temporarily disabled for debugging
-        # safety_frame = ttk.Frame(buttons_frame)
-        # safety_frame.pack(fill=tk.X, pady=(10, 0))
-
-        # self.safety_var = tk.BooleanVar(value=False)
-        # self.safety_checkbox = ttk.Checkbutton(
-        #     safety_frame,
-        #     text="🔒 Safety Lock - Enable Movement",
-        #     variable=self.safety_var
-        # )
-        # self.safety_checkbox.pack(anchor=tk.W)
-        # self.safety_checkbox.configure(command=self._on_safety_toggle)
-
         # IMU display section (under Stop button)
         imu_frame = ttk.Frame(buttons_frame)
         imu_frame.pack(fill=tk.X, pady=(10, 0))
@@ -268,10 +255,23 @@ class MovementControlPanel:
             imu_row = ttk.Frame(imu_frame)
             imu_row.pack(fill=tk.X, padx=(20, 0))
             ttk.Label(imu_row, text=f"{axis}:", font=('TkDefaultFont', 10, 'bold'), width=2).pack(side=tk.LEFT)
-            self.imu_labels[axis] = ttk.Label(imu_row, text="--.- m/s²", foreground=GUIConfig.COLORS['warning'], font=('TkDefaultFont', 10, 'bold'))
-            self.imu_labels[axis].pack(side=tk.LEFT, padx=(5, 0))
+            self.imu_labels[axis] = ttk.Label(imu_row, text="--.- m/s²   ", foreground=GUIConfig.COLORS['warning'], font=('TkDefaultFont', 10, 'bold'))
+            self.imu_labels[axis].pack(side=tk.RIGHT, padx=(5, 0))
 
-        # Movement Enable Toggle Button (below IMU)
+        # LiDAR distance display section (below IMU)
+        # LiDAR header
+        ttk.Label(imu_frame, text="LiDAR:", font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(10, 0))
+        
+        # LiDAR values (Front, Left, Right)
+        self.lidar_labels = {}
+        for direction in ['F', 'L', 'R']:  # Front, Left, Right
+            lidar_row = ttk.Frame(imu_frame)
+            lidar_row.pack(fill=tk.X, padx=(20, 0))
+            ttk.Label(lidar_row, text=f"{direction}:", font=('TkDefaultFont', 10, 'bold'), width=2).pack(side=tk.LEFT)
+            self.lidar_labels[direction] = ttk.Label(lidar_row, text="--.- m", foreground=GUIConfig.COLORS['warning'], font=('TkDefaultFont', 10, 'bold'))
+            self.lidar_labels[direction].pack(side=tk.LEFT, padx=(5, 0))
+
+        # Movement Enable Toggle Button (below LiDAR)
         self.movement_enabled = True
         self.movement_toggle = ttk.Button(
             imu_frame,
@@ -357,6 +357,29 @@ class MovementControlPanel:
                 if axis in self.imu_labels:
                     self.imu_labels[axis].config(text="Error", foreground=GUIConfig.COLORS['error'])
 
+    def update_lidar_data(self, sensor_data: Dict[str, Any]):
+        """Update LiDAR display with sensor data"""
+        try:
+            # Update LiDAR distance data (front, left, right)
+            if 'distance_front' in sensor_data:
+                distance = sensor_data['distance_front']
+                color = GUIConfig.COLORS['error'] if distance < 0.5 else GUIConfig.COLORS['success']
+                self.lidar_labels['F'].config(text=f"{distance:.2f} m", foreground=color)
+            if 'distance_left' in sensor_data:
+                distance = sensor_data['distance_left']
+                color = GUIConfig.COLORS['error'] if distance < 0.5 else GUIConfig.COLORS['success']
+                self.lidar_labels['L'].config(text=f"{distance:.2f} m", foreground=color)
+            if 'distance_right' in sensor_data:
+                distance = sensor_data['distance_right']
+                color = GUIConfig.COLORS['error'] if distance < 0.5 else GUIConfig.COLORS['success']
+                self.lidar_labels['R'].config(text=f"{distance:.2f} m", foreground=color)
+        except Exception as e:
+            logger.error(f"Error updating LiDAR data: {e}")
+            # Set error states for LiDAR labels
+            for direction in ['F', 'L', 'R']:
+                if direction in self.lidar_labels:
+                    self.lidar_labels[direction].config(text="Error", foreground=GUIConfig.COLORS['error'])
+
 
 class CameraPanel:
     """Handles camera display panel"""
@@ -376,8 +399,13 @@ class CameraPanel:
         camera_frame.pack_propagate(False)
         camera_frame.configure(width=GUIConfig.CAMERA_PANEL_WIDTH, height=GUIConfig.CAMERA_PANEL_HEIGHT)
 
-        # Camera display area
-        self.camera_label = ttk.Label(camera_frame, text="📹 No camera feed", background='gray')
+        # Camera display area with no border
+        self.camera_label = ttk.Label(
+            camera_frame, 
+            text="📹 No camera feed",
+            anchor='center',
+            justify='center'
+        )
         self.camera_label.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
         # Camera controls
@@ -443,9 +471,23 @@ class CameraPanel:
         """Update camera display with new image"""
         if pil_image and self.camera_label:
             try:
-                # Resize image to fit display area
+                # Calculate available space for image display
+                available_width = GUIConfig.CAMERA_PANEL_WIDTH - 20
+                available_height = GUIConfig.CAMERA_PANEL_HEIGHT - 100
+                
+                # Resize image to fit display area while maintaining aspect ratio
                 display_image = pil_image.copy()
-                display_image.thumbnail((GUIConfig.CAMERA_PANEL_WIDTH-20, GUIConfig.CAMERA_PANEL_HEIGHT-100))
+                
+                # Calculate scaling factor to fit image in available space
+                img_width, img_height = display_image.size
+                scale_w = available_width / img_width
+                scale_h = available_height / img_height
+                scale = min(scale_w, scale_h)
+                
+                # Resize image with proper scaling
+                new_width = int(img_width * scale)
+                new_height = int(img_height * scale)
+                display_image = display_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
                 # Convert to PhotoImage
                 photo = ImageTk.PhotoImage(display_image)

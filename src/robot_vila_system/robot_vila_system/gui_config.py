@@ -13,7 +13,7 @@ class GUIConfig:
     # Window settings
     WINDOW_TITLE = "Robot Nemotron Client"
     WINDOW_WIDTH = 1200
-    WINDOW_HEIGHT = 800
+    WINDOW_HEIGHT = 900
 
     # Colors
     COLORS = {

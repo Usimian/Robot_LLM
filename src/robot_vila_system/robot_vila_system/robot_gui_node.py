@@ -251,11 +251,11 @@ class RobotGUIROS2Node(Node):
             command_msg.duration = parameters.get('duration', 1.0) if parameters else 1.0
         elif command_type == 'strafe_left':
             command_msg.command_type = 'move'
-            command_msg.linear_y = parameters.get('speed', 0.3) if parameters else 0.3
+            command_msg.linear_y = parameters.get('speed', 0.8) if parameters else 0.8
             command_msg.duration = parameters.get('duration', 1.0) if parameters else 1.0
         elif command_type == 'strafe_right':
             command_msg.command_type = 'move'
-            command_msg.linear_y = -(parameters.get('speed', 0.3) if parameters else 0.3)
+            command_msg.linear_y = -(parameters.get('speed', 0.8) if parameters else 0.8)
             command_msg.duration = parameters.get('duration', 1.0) if parameters else 1.0
         elif command_type == 'stop':
             command_msg.command_type = 'stop'
@@ -547,9 +547,14 @@ class RobotGUIROS2:
     def _handle_camera_update(self, message_type: str, data):
         """Handle camera update from camera panel"""
         if message_type == 'camera_source_changed':
+            self.camera_source = data
             self._on_camera_source_change()
         elif message_type == 'image_loaded':
             self._load_image_file_from_path(data)
+            # Automatically switch to loaded source when image is loaded
+            self.camera_source = "loaded"
+            if hasattr(self, 'camera_panel'):
+                self.camera_panel.set_source("loaded")
         else:
             logger.warning(f"Unknown camera update type: {message_type}")
 
@@ -569,8 +574,16 @@ class RobotGUIROS2:
 
     def _on_camera_source_change(self):
         """Handle camera source change"""
-        # Update camera source logic here
-        pass
+        if self.camera_source == "loaded" and hasattr(self, 'loaded_image') and self.loaded_image:
+            # Show loaded image
+            if hasattr(self, 'camera_panel'):
+                self.camera_panel.update_camera_image(self.loaded_image)
+            self.log_message(f"📷 Camera source changed to: loaded image")
+        elif self.camera_source == "robot":
+            # Show robot camera feed - will be updated by next robot image
+            self.log_message(f"📷 Camera source changed to: robot camera")
+        else:
+            self.log_message(f"📷 Camera source changed to: {self.camera_source}")
 
 
 
@@ -602,6 +615,9 @@ class RobotGUIROS2:
         # Update system status panel with sensor data
         if hasattr(self, 'system_panel'):
             self.system_panel.update_hardware_status(data)
+        # Update movement panel with lidar data
+        if hasattr(self, 'movement_panel'):
+            self.movement_panel.update_lidar_data(data)
 
     def _handle_imu_data(self, data):
         """Handle IMU data updates"""
@@ -613,7 +629,8 @@ class RobotGUIROS2:
 
     def _handle_camera_image(self, data):
         """Handle camera image updates"""
-        if hasattr(self, 'camera_panel'):
+        # Only update camera display if source is set to robot
+        if hasattr(self, 'camera_panel') and self.camera_source == "robot":
             # Convert ROS image to PIL for display
             try:
                 # Use the same conversion logic as before
@@ -827,25 +844,66 @@ class RobotGUIROS2:
     def _request_cosmos_analysis(self, prompt: str):
         """Request Cosmos-Transfer1 analysis"""
         try:
-            # Use the ROS2 node to send analysis request
+            # Use the ROS2 node to send real analysis request to Cosmos service
             if hasattr(self, 'ros_node'):
-                # For now, just log the request since Cosmos integration is pending
                 self.log_message(f"🔍 Cosmos analysis requested: {prompt[:50]}...")
-                self.log_message("📝 Cosmos-Transfer1 integration pending - would analyze image here")
+                
+                # Call the actual Cosmos service
+                # Create Cosmos service client if it doesn't exist
+                if not hasattr(self.ros_node, 'cosmos_client'):
+                    from robot_msgs.srv import ExecuteCommand
+                    self.ros_node.cosmos_client = self.ros_node.create_client(ExecuteCommand, '/cosmos/request_analysis')
+                
+                if not self.ros_node.cosmos_client.wait_for_service(timeout_sec=1.0):
+                    self.log_message("❌ Cosmos analysis service not available")
+                    return
+                
+                # Create service request for Cosmos analysis
+                from robot_msgs.msg import RobotCommand
+                from robot_msgs.srv import ExecuteCommand
+                
+                command_msg = RobotCommand()
+                command_msg.robot_id = self.robot_id
+                command_msg.command_type = "cosmos_analysis"
+                # Use source_node field to pass the prompt (temporary workaround)
+                command_msg.source_node = f"{self.ros_node.get_name()}|{prompt}"
+                command_msg.timestamp_ns = self.ros_node.get_clock().now().nanoseconds
 
-                # TODO: Implement actual Cosmos-Transfer1 model integration
-                # For now, show a placeholder response
-                placeholder_result = {
-                    'success': True,
-                    'analysis_result': f'Placeholder analysis for: {prompt[:30]}...',
-                    'navigation_commands': '{"action": "forward", "distance": 1.0}',
-                    'confidence': 0.85,
-                    'timestamp_ns': self.get_clock().now().nanoseconds
-                }
+                request = ExecuteCommand.Request()
+                request.command = command_msg
 
-                # Update the Cosmos panel with results
-                if hasattr(self, 'cosmos_panel'):
-                    self.cosmos_panel.update_analysis_result(placeholder_result)
+                self.log_message(f"📡 Calling Cosmos analysis service...")
+                
+                # Call service asynchronously
+                future = self.ros_node.cosmos_client.call_async(request)
+                
+                # Handle response in callback
+                def handle_cosmos_response(future):
+                    try:
+                        response = future.result()
+                        if response.success:
+                            # Parse the real Cosmos response
+                            cosmos_result = {
+                                'success': True,
+                                'analysis_result': response.result_message,
+                                'navigation_commands': '{"action": "analyzed", "confidence": 0.85}',
+                                'confidence': 0.85,  # TODO: Get from actual response
+                                'timestamp_ns': self.ros_node.get_clock().now().nanoseconds
+                            }
+                            
+                            # Update the Cosmos panel with real results
+                            if hasattr(self, 'cosmos_panel'):
+                                self.cosmos_panel.update_analysis_result(cosmos_result)
+                                
+                            self.log_message(f"✅ Cosmos analysis complete: {response.result_message[:100]}...")
+                        else:
+                            self.log_message(f"❌ Cosmos analysis failed: {response.result_message}")
+                            
+                    except Exception as e:
+                        self.log_message(f"❌ Cosmos service response error: {e}")
+                
+                # Add callback for when service call completes
+                future.add_done_callback(handle_cosmos_response)
 
         except Exception as e:
             self.log_message(f"❌ Cosmos analysis error: {e}")

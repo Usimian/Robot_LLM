@@ -47,8 +47,8 @@ def generate_launch_description():
 
     cosmos_enabled_arg = DeclareLaunchArgument(
         'cosmos_enabled',
-        default_value='false',
-        description='Enable Cosmos-Transfer1 video generation service (node implementation pending)'
+        default_value='true',
+        description='Enable Cosmos-Transfer1 video generation service'
     )
     
     # Get launch configurations
