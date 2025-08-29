@@ -3,20 +3,13 @@
 Real Cosmos-Transfer1 Model Integration for Robot Navigation
 Uses official Cosmos SDK with LiDAR control input for navigation decisions
 """
-
-import os
-import sys
 import torch
 import numpy as np
 from PIL import Image
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any
 import logging
-import json
 import time
 from pathlib import Path
-
-# Direct PyTorch model loading - no complex SDK needed
-import torch.nn as nn
 
 # ROS2 imports
 from robot_msgs.msg import SensorData

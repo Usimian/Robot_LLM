@@ -5,12 +5,9 @@ Separated GUI components for better maintainability
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext, filedialog
-from typing import Dict, Any, Optional, Callable
-from datetime import datetime
+from tkinter import ttk, scrolledtext, filedialog
+from typing import Dict, Any, Callable
 from PIL import Image, ImageTk
-import cv2
-import numpy as np
 import logging
 
 from .gui_config import GUIConfig

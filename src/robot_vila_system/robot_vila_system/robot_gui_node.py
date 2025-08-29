@@ -6,20 +6,14 @@ Replaces HTTP/WebSocket communication with ROS2 messaging
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext, filedialog
+from tkinter import ttk
 import json
 import threading
 import time
-from datetime import datetime
-import base64
-import io
-from typing import List
-from typing import Dict, List, Optional
+from typing import Dict
 import logging
 import queue
-from dataclasses import dataclass
-from PIL import Image, ImageTk
-import cv2
+from PIL import Image
 import numpy as np
 
 # ROS2 imports
@@ -35,7 +29,6 @@ from std_msgs.msg import String
 
 # GUI component imports
 from .gui_config import GUIConfig
-from .gui_utils import GUIUtils
 from .gui_components import (
     SystemStatusPanel,
     MovementControlPanel,
@@ -243,12 +236,14 @@ class RobotGUIROS2Node(Node):
             command_msg.duration = parameters.get('duration', 1.0) if parameters else 1.0
         elif command_type == 'turn_left':
             command_msg.command_type = 'turn'
-            command_msg.angular_z = -(parameters.get('speed', 0.8) if parameters else 0.8)
-            command_msg.duration = parameters.get('duration', 1.0) if parameters else 1.0
+            command_msg.angular = parameters.get('angle', 90.0) if parameters else 90.0  # Positive = left
+            command_msg.angular_speed = parameters.get('speed', 0.5) if parameters else 0.5
+            command_msg.duration = parameters.get('duration', 8.0) if parameters else 8.0
         elif command_type == 'turn_right':
             command_msg.command_type = 'turn'
-            command_msg.angular_z = parameters.get('speed', 0.8) if parameters else 0.8
-            command_msg.duration = parameters.get('duration', 1.0) if parameters else 1.0
+            command_msg.angular = -(parameters.get('angle', 90.0) if parameters else 90.0)  # Negative = right
+            command_msg.angular_speed = parameters.get('speed', 0.5) if parameters else 0.5
+            command_msg.duration = parameters.get('duration', 8.0) if parameters else 8.0
         elif command_type == 'strafe_left':
             command_msg.command_type = 'move'
             command_msg.linear_y = parameters.get('speed', 0.8) if parameters else 0.8
@@ -260,11 +255,15 @@ class RobotGUIROS2Node(Node):
         elif command_type == 'stop':
             command_msg.command_type = 'stop'
             command_msg.linear_x = 0.0
-            command_msg.angular_z = 0.0
+            command_msg.linear_y = 0.0
+            command_msg.angular = 0.0
+            command_msg.angular_speed = 0.0
         elif command_type == 'emergency_stop':
             command_msg.command_type = 'stop'
             command_msg.linear_x = 0.0
-            command_msg.angular_z = 0.0
+            command_msg.linear_y = 0.0
+            command_msg.angular = 0.0
+            command_msg.angular_speed = 0.0
         elif command_type == 'safety_toggle':
             command_msg.command_type = 'safety_toggle'
 
@@ -1025,12 +1024,56 @@ class RobotGUIROS2:
             # Use default prompt for auto analysis
             default_prompt = "Analyze the current camera view for navigation."
             self._request_cosmos_analysis(default_prompt)
+    
+    def _on_window_close(self):
+        """Handle window close event (X button clicked)"""
+        logger.info("🚪 Window close requested")
+        try:
+            # Stop auto-analysis timer
+            if hasattr(self, 'auto_cosmos_timer') and self.auto_cosmos_timer:
+                self.root.after_cancel(self.auto_cosmos_timer)
+                self.auto_cosmos_timer = None
+            
+            # Cleanup ROS2 resources
+            logger.info("🧹 Cleaning up GUI resources...")
+            if hasattr(self, 'ros_node') and self.ros_node:
+                self.ros_node.destroy_node()
+            
+            # Shutdown ROS2
+            if rclpy.ok():
+                rclpy.shutdown()
+            
+            logger.info("✅ GUI cleanup complete")
+            
+            # Send SIGTERM to parent process group to terminate launch
+            import os
+            import signal
+            try:
+                # Get the process group ID and send SIGTERM to terminate launch
+                pgid = os.getpgid(0)
+                logger.info(f"🛑 Sending SIGTERM to process group {pgid}")
+                os.killpg(pgid, signal.SIGTERM)
+            except Exception as e:
+                logger.warning(f"⚠️ Could not terminate process group: {e}")
+            
+            # Destroy the window and exit
+            self.root.quit()
+            self.root.destroy()
+            
+            # Final exit
+            logger.info("🚪 Exiting application...")
+            os._exit(0)
+            
+        except Exception as e:
+            logger.error(f"❌ Error during window close: {e}")
+            # Force exit if cleanup fails
+            import os
+            os._exit(0)
 
 
 def main():
     """Main entry point"""
     import signal
-    import sys
     
     app = None
     

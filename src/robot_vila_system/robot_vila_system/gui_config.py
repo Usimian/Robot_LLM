@@ -4,8 +4,6 @@ GUI Configuration Constants
 Centralized configuration for the robot GUI
 """
 
-import tkinter as tk
-
 
 class GUIConfig:
     """Centralized GUI configuration constants"""
@@ -40,7 +38,6 @@ class GUIConfig:
     # Timing settings
     UPDATE_INTERVAL_MS = 1000  # 1 second
     ROS_START_DELAY_MS = 500   # 0.5 seconds
-    AUTO_ANALYSIS_DELAY_MS = 2000  # 2 seconds
 
     # VILA settings
     DEFAULT_VILA_PROMPT = "Analyze the current camera view for navigation."

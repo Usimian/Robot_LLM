@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
 import logging
-from typing import Optional, Tuple, Dict, Any
+from typing import Tuple
 
 from .gui_config import GUIConfig
 

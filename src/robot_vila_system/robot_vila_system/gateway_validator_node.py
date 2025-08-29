@@ -10,7 +10,6 @@ import json
 import time
 from datetime import datetime
 from robot_msgs.msg import RobotCommand
-from robot_msgs.srv import ExecuteCommand
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 

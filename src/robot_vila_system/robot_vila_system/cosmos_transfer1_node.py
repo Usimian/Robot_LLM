@@ -7,34 +7,24 @@ Direct interface to Cosmos-Transfer1 model for video generation and vision-langu
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
-import sys
-import os
 import json
-import logging
-import time
 import threading
 import torch
 from datetime import datetime
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
+from typing import Dict, Optional, Any
 from pathlib import Path
 import numpy as np
 from PIL import Image
-import cv2
 
 # ROS2 message imports
 from robot_msgs.msg import RobotCommand, SensorData
 from robot_msgs.srv import ExecuteCommand
-from sensor_msgs.msg import Image as ROSImage
-from std_msgs.msg import String, Bool
+from sensor_msgs.msg import Image as ROSImage, LaserScan
+from std_msgs.msg import String
 # cv_bridge removed - using direct image processing
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('CosmosTransfer1Node')
+# Logging is handled by ROS2 node logger (self.get_logger())
 
 @dataclass
 class CosmosConfig:
@@ -69,8 +59,10 @@ class CosmosTransfer1Node(Node):
         # Sensor and image data caching
         self.current_sensor_data = None
         self.current_camera_image = None
+        self.current_lidar_scan = None
         self.sensor_data_lock = threading.Lock()
         self.camera_image_lock = threading.Lock()
+        self.lidar_scan_lock = threading.Lock()
         
         # Direct image processing (no cv_bridge needed for now)
         
@@ -173,9 +165,18 @@ class CosmosTransfer1Node(Node):
             self.image_qos
         )
         
+        # Subscribe to full LiDAR scan for enhanced spatial understanding
+        self.lidar_subscriber = self.create_subscription(
+            LaserScan,
+            '/scan',
+            self._lidar_scan_callback,
+            sensor_qos
+        )
+        
         self.get_logger().info("📡 Subscribers configured:")
         self.get_logger().info("   └── /robot/sensors (SensorData)")
         self.get_logger().info("   └── /realsense/camera/color/image_raw (Image)")
+        self.get_logger().info("   └── /scan (LaserScan) - Enhanced LiDAR")
     
     def _load_model_async(self):
         """Load Cosmos model in background thread"""
@@ -261,7 +262,6 @@ class CosmosTransfer1Node(Node):
                     # This allows the GUI to show Cosmos as "Online"
                     self.model_loaded = True
                     self.get_logger().info("✅ Cosmos-Transfer1 model files loaded successfully")
-                    self.get_logger().info("📝 Note: Full model inference not yet implemented")
                     
                     # Publish status update
                     self._publish_status("model_loaded", "Model files loaded, inference pending")
@@ -360,6 +360,65 @@ class CosmosTransfer1Node(Node):
             
         except Exception as e:
             self.get_logger().error(f"❌ Error processing camera image: {e}")
+    
+    def _lidar_scan_callback(self, msg: LaserScan):
+        """Handle incoming LiDAR scan data"""
+        try:
+            # Process and downsample to 360 points (1° resolution)
+            processed_scan = self._process_lidar_scan(msg)
+            
+            with self.lidar_scan_lock:
+                self.current_lidar_scan = processed_scan
+                
+            self.get_logger().debug(f"🔍 Updated LiDAR scan: {len(processed_scan['ranges'])} points (1° resolution)")
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ Error processing LiDAR scan: {e}")
+    
+    def _process_lidar_scan(self, msg: LaserScan) -> dict:
+        """Process and downsample LiDAR scan to 360 points with 1° resolution"""
+        import numpy as np
+        
+        # Create 360-point array (1° resolution)
+        processed_ranges = []
+        processed_angles = []
+        
+        for deg in range(360):
+            angle_rad = np.deg2rad(deg - 180)  # Convert to -180° to +180° range
+            processed_angles.append(angle_rad)
+            
+            # Check if this is in the rear blind spot (±45° from rear)
+            rear_angle = abs(abs(deg - 180) - 180)  # Distance from rear (180°)
+            if rear_angle <= 45:
+                # Rear blind spot - no data available
+                processed_ranges.append(float('inf'))  # Mark as infinite distance
+                continue
+            
+            # Find corresponding index in original scan
+            if msg.angle_min <= angle_rad <= msg.angle_max:
+                # Calculate index in original scan
+                scan_index = int((angle_rad - msg.angle_min) / msg.angle_increment)
+                scan_index = max(0, min(scan_index, len(msg.ranges) - 1))
+                
+                # Get range value, handle invalid readings
+                range_val = msg.ranges[scan_index]
+                if range_val < msg.range_min or range_val > msg.range_max:
+                    range_val = msg.range_max  # Treat invalid as max range
+                    
+                processed_ranges.append(range_val)
+            else:
+                # Angle outside original scan range
+                processed_ranges.append(msg.range_max)
+        
+        return {
+            'ranges': processed_ranges,
+            'angles': processed_angles,
+            'range_min': msg.range_min,
+            'range_max': msg.range_max,
+            'angle_increment': np.deg2rad(1.0),  # 1° resolution
+            'total_points': 360,
+            'rear_blind_spot': True  # Flag indicating rear ±45° is blocked
+        }
     
     def _ros_image_to_pil(self, ros_image: ROSImage) -> Image.Image:
         """Convert ROS Image message to PIL Image"""
@@ -509,17 +568,17 @@ class CosmosTransfer1Node(Node):
                 safety_action = "move_forward"
                 confidence = 0.80
             
-            # Prompt-based intent analysis
+            # Prompt-based intent analysis - only detect explicit movement commands
             if "stop" in prompt_lower or "halt" in prompt_lower:
                 intent_action = "stop"
                 analysis_factors.append("Stop command detected in prompt")
-            elif "left" in prompt_lower:
+            elif "turn left" in prompt_lower or "go left" in prompt_lower:
                 intent_action = "turn_left"
                 analysis_factors.append("Left turn requested in prompt")
-            elif "right" in prompt_lower:
+            elif "turn right" in prompt_lower or "go right" in prompt_lower:
                 intent_action = "turn_right"
                 analysis_factors.append("Right turn requested in prompt")
-            elif "forward" in prompt_lower or "ahead" in prompt_lower:
+            elif "forward" in prompt_lower or "ahead" in prompt_lower or "move forward" in prompt_lower:
                 intent_action = "move_forward"
                 analysis_factors.append("Forward movement requested in prompt")
             else:
@@ -777,26 +836,44 @@ def main(args=None):
         node = CosmosTransfer1Node()
         rclpy.spin(node)
     except KeyboardInterrupt:
-        logger.debug("🛑 Received shutdown signal")
+        if node:
+            node.get_logger().debug("🛑 Received shutdown signal")
+        else:
+            print("🛑 Received shutdown signal")
     except Exception as e:
-        logger.error(f"Node error: {e}")
+        if node:
+            node.get_logger().error(f"Node error: {e}")
+        else:
+            print(f"Node error: {e}")
     finally:
         # Clean shutdown
         try:
             if node is not None:
+                node.get_logger().debug("✅ Node destroyed cleanly")
                 node.destroy_node()
-                logger.debug("✅ Node destroyed cleanly")
         except Exception as e:
-            logger.warning(f"⚠️ Node destruction warning: {e}")
+            if node:
+                node.get_logger().warning(f"⚠️ Node destruction warning: {e}")
+            else:
+                print(f"⚠️ Node destruction warning: {e}")
         
         try:
             if rclpy.ok():
                 rclpy.shutdown()
-                logger.debug("✅ ROS2 shutdown cleanly")
+                if node:
+                    node.get_logger().debug("✅ ROS2 shutdown cleanly")
+                else:
+                    print("✅ ROS2 shutdown cleanly")
         except Exception as e:
-            logger.warning(f"⚠️ ROS2 shutdown warning: {e}")
+            if node:
+                node.get_logger().warning(f"⚠️ ROS2 shutdown warning: {e}")
+            else:
+                print(f"⚠️ ROS2 shutdown warning: {e}")
         
-        logger.debug("👋 Cosmos node exited")
+        if node:
+            node.get_logger().debug("👋 Cosmos node exited")
+        else:
+            print("👋 Cosmos node exited")
 
 if __name__ == '__main__':
     main()
