@@ -341,6 +341,11 @@ class RobotGUIROS2:
         self._cleanup_requested = False
         # VILA functionality removed - using Cosmos-Transfer1 directly
         self.camera_source = GUIConfig.DEFAULT_CAMERA_SOURCE
+        
+        # Auto Cosmos analysis
+        self.auto_cosmos_enabled = False
+        self.auto_cosmos_timer = None
+        self.auto_execute_enabled = True  # Default: execute Cosmos recommendations
 
         # Threading and queues
         self.update_queue = queue.Queue()
@@ -497,14 +502,19 @@ class RobotGUIROS2:
             # Use spin_once with timeout to allow checking for cleanup requests
             while rclpy.ok() and not self._cleanup_requested:
                 try:
-                    rclpy.spin_once(self.ros_node, timeout_sec=0.1)
+                    rclpy.spin_once(self.ros_node, timeout_sec=0.05)  # Shorter timeout for faster exit
                 except Exception as e:
                     if self._cleanup_requested:
                         break
                     logger.warning(f"⚠️ ROS2 spin_once error: {e}")
+                    # If there's an error, sleep briefly to avoid tight loop
+                    import time
+                    time.sleep(0.1)
             logger.debug("🛑 ROS2 spinning stopped")
         except Exception as e:
             logger.error(f"❌ ROS2 spin error: {e}")
+        finally:
+            logger.debug("🔚 ROS2 spin thread exiting")
 
     # _process_updates method removed - using direct ROS2 callbacks
 
@@ -549,12 +559,18 @@ class RobotGUIROS2:
         if message_type == 'camera_source_changed':
             self.camera_source = data
             self._on_camera_source_change()
+            self.log_message(f"📷 Camera source switched to: {data}")
         elif message_type == 'image_loaded':
             self._load_image_file_from_path(data)
-            # Automatically switch to loaded source when image is loaded
-            self.camera_source = "loaded"
-            if hasattr(self, 'camera_panel'):
-                self.camera_panel.set_source("loaded")
+            # Only switch to loaded source if user hasn't explicitly selected robot source
+            current_source = self.camera_source
+            if current_source != "robot":
+                self.camera_source = "loaded"
+                if hasattr(self, 'camera_panel'):
+                    self.camera_panel.set_source("loaded")
+                self.log_message(f"📷 Auto-switched to loaded image source")
+            else:
+                self.log_message(f"📷 Image loaded but keeping robot source as selected")
         else:
             logger.warning(f"Unknown camera update type: {message_type}")
 
@@ -563,27 +579,39 @@ class RobotGUIROS2:
         try:
             from PIL import Image
             self.loaded_image = Image.open(file_path)
-            self.log_message(f"📁 Image loaded: {file_path}")
-            # Update camera panel
-            if hasattr(self, 'camera_panel'):
+            filename = file_path.split('/')[-1] if '/' in file_path else file_path
+            self.log_message(f"📁 Image loaded: {filename}")
+            
+            # Only update camera panel display if loaded source is currently selected
+            if hasattr(self, 'camera_panel') and self.camera_source == "loaded":
                 self.camera_panel.update_camera_image(self.loaded_image)
+                
         except Exception as e:
             self.log_message(f"❌ Failed to load image: {e}")
+            self.loaded_image = None
 
     # VILA functionality removed - using Cosmos-Transfer1 directly
 
     def _on_camera_source_change(self):
         """Handle camera source change"""
-        if self.camera_source == "loaded" and hasattr(self, 'loaded_image') and self.loaded_image:
-            # Show loaded image
-            if hasattr(self, 'camera_panel'):
-                self.camera_panel.update_camera_image(self.loaded_image)
-            self.log_message(f"📷 Camera source changed to: loaded image")
+        if self.camera_source == "loaded":
+            if hasattr(self, 'loaded_image') and self.loaded_image:
+                # Show loaded image immediately
+                if hasattr(self, 'camera_panel'):
+                    self.camera_panel.update_camera_image(self.loaded_image)
+                self.log_message(f"📷 Displaying loaded image")
+            else:
+                # No loaded image available, show message
+                if hasattr(self, 'camera_panel') and hasattr(self.camera_panel, 'camera_label'):
+                    self.camera_panel.camera_label.config(text="📷 No image loaded\nClick 'Load Image' to select one", image="")
+                self.log_message(f"📷 Loaded image source selected but no image available")
         elif self.camera_source == "robot":
-            # Show robot camera feed - will be updated by next robot image
-            self.log_message(f"📷 Camera source changed to: robot camera")
+            # Clear display and wait for next robot image
+            if hasattr(self, 'camera_panel') and hasattr(self.camera_panel, 'camera_label'):
+                self.camera_panel.camera_label.config(text="📷 Waiting for robot camera feed...", image="")
+            self.log_message(f"📷 Robot camera source selected")
         else:
-            self.log_message(f"📷 Camera source changed to: {self.camera_source}")
+            self.log_message(f"📷 Unknown camera source: {self.camera_source}")
 
 
 
@@ -629,6 +657,9 @@ class RobotGUIROS2:
 
     def _handle_camera_image(self, data):
         """Handle camera image updates"""
+        # Store the current camera image for potential use
+        self.current_image = data
+        
         # Only update camera display if source is set to robot
         if hasattr(self, 'camera_panel') and self.camera_source == "robot":
             # Convert ROS image to PIL for display
@@ -649,6 +680,8 @@ class RobotGUIROS2:
                 self.camera_panel.update_camera_image(pil_image)
             except Exception as e:
                 logger.error(f"Error converting camera image: {e}")
+                if hasattr(self, 'camera_panel') and hasattr(self.camera_panel, 'camera_label'):
+                    self.camera_panel.camera_label.config(text=f"❌ Camera error: {str(e)}", image="")
 
     def _handle_navigation_commands(self, data):
         """Handle navigation commands"""
@@ -720,126 +753,114 @@ class RobotGUIROS2:
         else:
             logger.info(message)
     
+    def _immediate_exit(self):
+        """Immediate exit without any cleanup to prevent hanging"""
+        import os
+        print("🔒 Window close - immediate exit")
+        os._exit(0)
+    
     def _on_window_close(self):
-        """Handle window close event"""
+        """Handle window close event with timeout protection"""
         logger.info("🔒 Window close event triggered")
         
-        # Immediately close the window first
-        try:
-            self.root.quit()  # Exit mainloop immediately
-        except Exception as e:
-            logger.error(f"❌ Error quitting mainloop: {e}")
-        
-        # Start cleanup in background thread to avoid blocking
+        # Set up a timeout to force exit if hanging
         import threading
-        cleanup_thread = threading.Thread(target=self._background_cleanup, daemon=True)
-        cleanup_thread.start()
+        import os
         
-        # Force window destruction
+        def force_exit_after_timeout():
+            import time
+            time.sleep(2.0)  # Wait 2 seconds max
+            print("⏰ Timeout reached - force exit")
+            os._exit(1)
+        
+        # Start timeout thread
+        timeout_thread = threading.Thread(target=force_exit_after_timeout, daemon=True)
+        timeout_thread.start()
+        
         try:
-            self.root.destroy()  # Destroy window
-        except Exception as e:
-            logger.error(f"❌ Error destroying window: {e}")
-    
-    def _background_cleanup(self):
-        """Perform cleanup in background thread"""
-        try:
-            logger.info("🧹 Starting background cleanup...")
-            self.cleanup()
-        except Exception as e:
-            logger.error(f"❌ Error during background cleanup: {e}")
-        finally:
-            # Force exit after cleanup attempt
-            import os
-            logger.info("🚪 Force exiting application...")
-            os._exit(0)
-
-    def cleanup(self):
-        """Cleanup resources"""
-        try:
-            logger.info("🧹 Cleaning up GUI resources...")
-
-            # Set cleanup flag to stop ROS2 spinning thread
-            if hasattr(self, '_cleanup_requested'):
-                self._cleanup_requested = True
-                logger.info("🛑 Cleanup requested")
-
-            # Don't wait for ROS thread - just signal it to stop
-            if hasattr(self, 'ros_spin_thread') and self.ros_spin_thread.is_alive():
-                logger.info("🔄 ROS thread still running, signaling to stop...")
-                # Thread will stop on its own when it checks _cleanup_requested
-
-            # Close ROS2 node with timeout
-            if hasattr(self, 'ros_node') and self.ros_node is not None:
-                logger.info("🔌 Destroying ROS2 node...")
-                try:
-                    import signal
-                    import threading
-                    
-                    def timeout_handler():
-                        logger.warning("⚠️ ROS2 node destruction timeout, skipping...")
-                        
-                    timer = threading.Timer(0.5, timeout_handler)
-                    timer.start()
-                    try:
-                        self.ros_node.destroy_node()
-                        timer.cancel()
-                    except Exception as e:
-                        timer.cancel()
-                        logger.warning(f"⚠️ Error destroying ROS2 node: {e}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Error setting up node destruction: {e}")
-                self.ros_node = None
-                
-            # Shutdown ROS2 with timeout
-            if rclpy.ok():
-                logger.info("🔌 Shutting down ROS2...")
-                try:
-                    import threading
-                    
-                    def shutdown_with_timeout():
-                        try:
-                            rclpy.shutdown()
-                        except Exception as e:
-                            logger.warning(f"⚠️ Error shutting down ROS2: {e}")
-                    
-                    shutdown_thread = threading.Thread(target=shutdown_with_timeout, daemon=True)
-                    shutdown_thread.start()
-                    shutdown_thread.join(timeout=0.5)
-                    
-                    if shutdown_thread.is_alive():
-                        logger.warning("⚠️ ROS2 shutdown timeout, proceeding anyway...")
-                        
-                except Exception as e:
-                    logger.warning(f"⚠️ Error during ROS2 shutdown: {e}")
-
-            logger.info("✅ GUI cleanup completed")
+            # Set cleanup flag
+            self._cleanup_requested = True
+            
+            # Destroy window immediately
+            self.root.destroy()
             
         except Exception as e:
-            logger.error(f"❌ Error during cleanup: {e}")
+            logger.error(f"❌ Error during window close: {e}")
+        
+        # If we get here, exit normally
+        logger.info("🚪 Normal exit")
+        os._exit(0)
+    
+    def _cleanup_simple(self):
+        """Simple cleanup without waiting for threads"""
+        try:
+            logger.info("🧹 Simple cleanup starting...")
+            
+            # Stop auto analysis timer
+            self._stop_auto_cosmos_timer()
+            
+            # Don't wait for ROS thread - it will stop on its own
+            # Just destroy the node quickly
+            if hasattr(self, 'ros_node') and self.ros_node is not None:
+                try:
+                    self.ros_node.destroy_node()
+                except:
+                    pass  # Ignore errors during cleanup
+                self.ros_node = None
+            
+            # Quick ROS shutdown without waiting
+            if rclpy.ok():
+                try:
+                    rclpy.shutdown()
+                except:
+                    pass  # Ignore errors during cleanup
+                    
+            logger.info("✅ Simple cleanup completed")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error during simple cleanup: {e}")
+
+    def cleanup(self):
+        """Cleanup resources (for Ctrl-C compatibility)"""
+        # Use the same simple cleanup as window close
+        self._cleanup_simple()
 
     def _handle_cosmos_analysis(self, event_type: str, data):
         """Handle Cosmos-Transfer1 analysis events"""
         if event_type == 'load_image':
-            self._load_image_file_from_path(data)
+            self._load_image_file_for_cosmos(data)
         elif event_type == 'request_analysis':
             self._request_cosmos_analysis(data)
+        elif event_type == 'auto_analysis_toggle':
+            self._toggle_auto_cosmos_analysis(data)
+        elif event_type == 'auto_execute_toggle':
+            self._toggle_auto_execute(data)
         else:
             logger.warning(f"Unknown Cosmos analysis event: {event_type}")
+    
+    def _toggle_auto_execute(self, enabled: bool):
+        """Toggle auto execute Cosmos recommendations on/off"""
+        self.auto_execute_enabled = enabled
+        if enabled:
+            self.log_message("🤖 Auto execute Cosmos recommendations enabled")
+        else:
+            self.log_message("🤖 Auto execute Cosmos recommendations disabled")
 
-    def _load_image_file_from_path(self, file_path: str):
+    def _load_image_file_for_cosmos(self, file_path: str):
         """Load image from file path for Cosmos analysis"""
         try:
             from PIL import Image
             self.loaded_image = Image.open(file_path)
-            self.log_message(f"📁 Image loaded for Cosmos analysis: {file_path}")
+            filename = file_path.split('/')[-1] if '/' in file_path else file_path
+            self.log_message(f"📁 Image loaded for Cosmos analysis: {filename}")
 
-            # Update camera panel if it exists
-            if hasattr(self, 'camera_panel'):
+            # Update camera panel display only if loaded source is selected
+            if hasattr(self, 'camera_panel') and self.camera_source == "loaded":
                 self.camera_panel.update_camera_image(self.loaded_image)
 
         except Exception as e:
             self.log_message(f"❌ Failed to load image: {e}")
+            self.loaded_image = None
 
     def _request_cosmos_analysis(self, prompt: str):
         """Request Cosmos-Transfer1 analysis"""
@@ -882,20 +903,77 @@ class RobotGUIROS2:
                     try:
                         response = future.result()
                         if response.success:
-                            # Parse the real Cosmos response
-                            cosmos_result = {
-                                'success': True,
-                                'analysis_result': response.result_message,
-                                'navigation_commands': '{"action": "analyzed", "confidence": 0.85}',
-                                'confidence': 0.85,  # TODO: Get from actual response
-                                'timestamp_ns': self.ros_node.get_clock().now().nanoseconds
-                            }
-                            
-                            # Update the Cosmos panel with real results
-                            if hasattr(self, 'cosmos_panel'):
-                                self.cosmos_panel.update_analysis_result(cosmos_result)
+                            # Parse the JSON response from Cosmos service
+                            try:
+                                import json
+                                result_data = json.loads(response.result_message)
                                 
-                            self.log_message(f"✅ Cosmos analysis complete: {response.result_message[:100]}...")
+                                analysis_text = result_data.get('analysis', 'Analysis complete')
+                                navigation_commands = result_data.get('navigation_commands', {'action': 'stop', 'confidence': 0.0})
+                                action = navigation_commands.get('action', 'stop')
+                                confidence = navigation_commands.get('confidence', 0.0)
+                                
+                                cosmos_result = {
+                                    'success': True,
+                                    'analysis_result': analysis_text,
+                                    'navigation_commands': navigation_commands,
+                                    'confidence': confidence,
+                                    'timestamp_ns': self.ros_node.get_clock().now().nanoseconds
+                                }
+                                
+                                # Update the Cosmos panel with real results
+                                if hasattr(self, 'cosmos_panel'):
+                                    self.cosmos_panel.update_analysis_result(cosmos_result)
+                                
+                                # EXECUTE THE RECOMMENDED ACTION (if auto-execute enabled)
+                                if self.auto_execute_enabled:
+                                    if action != "stop" and confidence > 0.6:
+                                        if self.movement_enabled:
+                                            self.log_message(f"🤖 Executing Cosmos recommendation: {action} (confidence: {confidence:.2f})")
+                                            self.ros_node.send_robot_command(action)
+                                        else:
+                                            self.log_message(f"🔒 Movement disabled - Cosmos recommended: {action}")
+                                    else:
+                                        self.log_message(f"🛑 Cosmos recommends: {action} (confidence: {confidence:.2f})")
+                                        if action == "stop":
+                                            self.ros_node.send_robot_command("stop")
+                                else:
+                                    self.log_message(f"📋 Cosmos recommends: {action} (confidence: {confidence:.2f}) - Auto-execute disabled")
+                                
+                                self.log_message(f"✅ Cosmos analysis: {analysis_text[:80]}...")
+                                
+                            except json.JSONDecodeError as e:
+                                self.log_message(f"❌ Error parsing Cosmos JSON response: {e}")
+                                # Fallback to text parsing
+                                analysis_text = response.result_message
+                                action = "stop"
+                                if "move_forward" in analysis_text:
+                                    action = "move_forward"
+                                elif "turn_left" in analysis_text:
+                                    action = "turn_left"
+                                elif "turn_right" in analysis_text:
+                                    action = "turn_right"
+                                
+                                cosmos_result = {
+                                    'success': True,
+                                    'analysis_result': analysis_text,
+                                    'navigation_commands': {'action': action, 'confidence': 0.5},
+                                    'confidence': 0.5,
+                                    'timestamp_ns': self.ros_node.get_clock().now().nanoseconds
+                                }
+                                
+                                if hasattr(self, 'cosmos_panel'):
+                                    self.cosmos_panel.update_analysis_result(cosmos_result)
+                                
+                            except Exception as e:
+                                self.log_message(f"❌ Error processing Cosmos response: {e}")
+                                cosmos_result = {
+                                    'success': False,
+                                    'analysis_result': f"Error: {str(e)}",
+                                    'navigation_commands': {'action': 'stop', 'confidence': 0.0},
+                                    'confidence': 0.0,
+                                    'timestamp_ns': self.ros_node.get_clock().now().nanoseconds
+                                }
                         else:
                             self.log_message(f"❌ Cosmos analysis failed: {response.result_message}")
                             
@@ -908,9 +986,69 @@ class RobotGUIROS2:
         except Exception as e:
             self.log_message(f"❌ Cosmos analysis error: {e}")
 
+    def _toggle_auto_cosmos_analysis(self, enabled: bool):
+        """Toggle auto Cosmos analysis on/off"""
+        self.auto_cosmos_enabled = enabled
+        
+        if enabled:
+            self.log_message("🔄 Auto Cosmos analysis enabled")
+            self._start_auto_cosmos_timer()
+        else:
+            self.log_message("🔄 Auto Cosmos analysis disabled")
+            self._stop_auto_cosmos_timer()
+    
+    def _start_auto_cosmos_timer(self):
+        """Start the auto Cosmos analysis timer"""
+        if self.auto_cosmos_timer:
+            self.root.after_cancel(self.auto_cosmos_timer)
+        
+        # Start timer for automatic analysis every 5 seconds
+        self._schedule_auto_cosmos_analysis()
+    
+    def _stop_auto_cosmos_timer(self):
+        """Stop the auto Cosmos analysis timer"""
+        if self.auto_cosmos_timer:
+            self.root.after_cancel(self.auto_cosmos_timer)
+            self.auto_cosmos_timer = None
+    
+    def _schedule_auto_cosmos_analysis(self):
+        """Schedule the next auto Cosmos analysis"""
+        if self.auto_cosmos_enabled:
+            # Perform analysis
+            self._auto_cosmos_analysis()
+            # Schedule next analysis in 5 seconds
+            self.auto_cosmos_timer = self.root.after(5000, self._schedule_auto_cosmos_analysis)
+    
+    def _auto_cosmos_analysis(self):
+        """Perform automatic Cosmos analysis"""
+        if self.auto_cosmos_enabled:
+            # Use default prompt for auto analysis
+            default_prompt = "Analyze the current camera view for navigation."
+            self._request_cosmos_analysis(default_prompt)
+
 
 def main():
     """Main entry point"""
+    import signal
+    import sys
+    
+    app = None
+    
+    def signal_handler(signum, frame):
+        """Handle Ctrl-C and other signals consistently with window close"""
+        logger.info(f"🛑 Received signal {signum} (Ctrl-C)")
+        if app:
+            logger.info("🧹 Initiating graceful shutdown...")
+            app._on_window_close()  # Use the same cleanup path as window close
+        else:
+            logger.info("🚪 No app to cleanup, exiting...")
+            import os
+            os._exit(0)
+    
+    # Set up signal handlers for consistent shutdown
+    signal.signal(signal.SIGINT, signal_handler)   # Ctrl-C
+    signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
+    
     try:
         logger.info("🚀 Starting Robot GUI application...")
 
@@ -927,6 +1065,9 @@ def main():
         # Start Tkinter main loop
         logger.debug("🔧 Starting Tkinter main loop...")
         root.mainloop()
+        
+        # If we reach here, the window was closed
+        logger.info("🔒 Main loop exited")
 
     except KeyboardInterrupt:
         logger.info("🛑 Received keyboard interrupt")
@@ -935,13 +1076,11 @@ def main():
         import traceback
         traceback.print_exc()
     finally:
-        try:
-            if 'app' in locals():
-                app.cleanup()
-        except Exception as e:
-            logger.error(f"❌ Final cleanup error: {e}")
-
+        # Don't do cleanup here - it was already done in _on_window_close
         logger.info("👋 Robot GUI application exited")
+        # Use os._exit to avoid any remaining cleanup issues
+        import os
+        os._exit(0)
 
 
 if __name__ == '__main__':

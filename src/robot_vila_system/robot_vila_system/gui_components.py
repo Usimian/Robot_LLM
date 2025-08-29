@@ -275,7 +275,7 @@ class MovementControlPanel:
         self.movement_enabled = True
         self.movement_toggle = ttk.Button(
             imu_frame,
-            text="✅ ENABLED - Click to Disable Movement",
+            text="✅ ENABLED",
             command=self._toggle_movement,
             style='Toggle.TButton'
         )
@@ -292,9 +292,9 @@ class MovementControlPanel:
         self.movement_enabled = not self.movement_enabled
 
         if self.movement_enabled:
-            self.movement_toggle.config(text="✅ ENABLED - Click to Disable Movement")
+            self.movement_toggle.config(text="✅ ENABLED")
         else:
-            self.movement_toggle.config(text="🔒 DISABLED - Click to Enable Movement")
+            self.movement_toggle.config(text="🔒 DISABLED")
 
         # Update button states
         self.update_button_states(self.movement_enabled)
@@ -321,9 +321,9 @@ class MovementControlPanel:
         # Update toggle button appearance
         if hasattr(self, 'movement_toggle'):
             if movement_enabled:
-                self.movement_toggle.config(text="✅ ENABLED - Click to Disable Movement")
+                self.movement_toggle.config(text="✅ ENABLED")
             else:
-                self.movement_toggle.config(text="🔒 DISABLED - Click to Enable Movement")
+                self.movement_toggle.config(text="🔒 DISABLED")
 
         # Enable/disable movement buttons based on movement status
         # Stop button is always enabled
@@ -453,6 +453,12 @@ class CameraPanel:
         source = self.source_var.get()
         if self.image_callback:
             self.image_callback('camera_source_changed', source)
+        
+        # Provide immediate visual feedback
+        if source == "robot":
+            self.camera_label.config(text="📷 Waiting for robot camera feed...", image="")
+        elif source == "loaded":
+            self.camera_label.config(text="📷 Select 'Load Image' to choose an image", image="")
 
     def _load_image_file(self):
         """Load image file from disk"""
@@ -464,8 +470,12 @@ class CameraPanel:
             ]
         )
 
-        if file_path and self.image_callback:
-            self.image_callback('image_loaded', file_path)
+        if file_path:
+            # Show loading message immediately
+            self.camera_label.config(text="📁 Loading image...", image="")
+            
+            if self.image_callback:
+                self.image_callback('image_loaded', file_path)
 
     def update_camera_image(self, pil_image):
         """Update camera display with new image"""
@@ -480,14 +490,15 @@ class CameraPanel:
                 
                 # Calculate scaling factor to fit image in available space
                 img_width, img_height = display_image.size
-                scale_w = available_width / img_width
-                scale_h = available_height / img_height
-                scale = min(scale_w, scale_h)
+                scale_w = available_width / img_width if img_width > 0 else 1
+                scale_h = available_height / img_height if img_height > 0 else 1
+                scale = min(scale_w, scale_h, 1.0)  # Don't upscale
                 
-                # Resize image with proper scaling
-                new_width = int(img_width * scale)
-                new_height = int(img_height * scale)
-                display_image = display_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                # Only resize if scaling is needed
+                if scale < 1.0:
+                    new_width = max(1, int(img_width * scale))
+                    new_height = max(1, int(img_height * scale))
+                    display_image = display_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
                 # Convert to PhotoImage
                 photo = ImageTk.PhotoImage(display_image)
@@ -495,12 +506,20 @@ class CameraPanel:
                 self.camera_label.image = photo  # Keep reference
 
             except Exception as e:
-                self.camera_label.config(text=f"❌ Error displaying image: {str(e)}", image="")
+                error_msg = f"❌ Error displaying image: {str(e)[:50]}"
+                self.camera_label.config(text=error_msg, image="")
+                # Clear the image reference
+                if hasattr(self.camera_label, 'image'):
+                    self.camera_label.image = None
 
     def set_source(self, source: str):
-        """Set camera source"""
+        """Set camera source programmatically"""
         if self.source_var and source in GUIConfig.CAMERA_SOURCES:
-            self.source_var.set(source)
+            old_source = self.source_var.get()
+            if old_source != source:
+                self.source_var.set(source)
+                # Don't trigger callback since this is programmatic
+                # The callback will be triggered by the calling code if needed
 
 
 # VILAAnalysisPanel removed - using Cosmos-Transfer1 directly
@@ -578,7 +597,8 @@ class CosmosAnalysisPanel:
         self.log_callback = log_callback
         self.prompt_text = None
         self.result_text = None
-        self.load_button = None
+        self.auto_analysis_enabled = False
+        self.auto_toggle_button = None
 
     def create(self, parent):
         """Create the Cosmos-Transfer1 analysis panel"""
@@ -600,13 +620,24 @@ class CosmosAnalysisPanel:
         controls_frame = ttk.Frame(parent)
         controls_frame.pack(fill=tk.X, pady=(0, 10))
 
-        # Load image button
-        self.load_button = ttk.Button(
+        # Auto analysis toggle button (left side)
+        self.auto_toggle_button = ttk.Button(
             controls_frame,
-            text="📁 Load Image",
-            command=self._load_image_file
+            text="🔄 Auto: OFF",
+            command=self._toggle_auto_analysis,
+            style='AutoToggle.TButton'
         )
-        self.load_button.pack(side=tk.LEFT, padx=5)
+        self.auto_toggle_button.pack(side=tk.LEFT, padx=5)
+        
+        # Auto execute toggle button
+        self.auto_execute_enabled = True  # Default enabled
+        self.auto_execute_button = ttk.Button(
+            controls_frame,
+            text="🤖 Execute: ON",
+            command=self._toggle_auto_execute,
+            style='AutoToggle.TButton'
+        )
+        self.auto_execute_button.pack(side=tk.LEFT, padx=5)
 
         # Analyze button
         ttk.Button(
@@ -614,6 +645,10 @@ class CosmosAnalysisPanel:
             text="🔍 Analyze",
             command=self._request_analysis
         ).pack(side=tk.RIGHT, padx=5)
+
+        # Configure auto toggle button style
+        style = ttk.Style()
+        style.configure('AutoToggle.TButton', font=('TkDefaultFont', 10, 'bold'))
 
         # Prompt input area
         prompt_frame = ttk.Frame(parent)
@@ -638,25 +673,41 @@ class CosmosAnalysisPanel:
         self.result_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-    def _load_image_file(self):
-        """Load image from file"""
-        try:
-            file_path = filedialog.askopenfilename(
-                title="Select Image File",
-                filetypes=[
-                    ("Image files", "*.png *.jpg *.jpeg *.gif *.bmp *.tiff"),
-                    ("All files", "*.*")
-                ]
-            )
 
-            if file_path and self.analysis_callback:
-                self.analysis_callback('load_image', file_path)
-                if self.log_callback:
-                    self.log_callback(f"📁 Image loaded: {file_path}")
 
-        except Exception as e:
+    def _toggle_auto_analysis(self):
+        """Toggle auto analysis on/off"""
+        self.auto_analysis_enabled = not self.auto_analysis_enabled
+        
+        if self.auto_analysis_enabled:
+            self.auto_toggle_button.config(text="🔄 Auto: ON")
             if self.log_callback:
-                self.log_callback(f"❌ Failed to load image: {e}")
+                self.log_callback("🔄 Auto Cosmos analysis ENABLED")
+        else:
+            self.auto_toggle_button.config(text="🔄 Auto: OFF")
+            if self.log_callback:
+                self.log_callback("🔄 Auto Cosmos analysis DISABLED")
+        
+        # Notify the parent about auto analysis state change
+        if self.analysis_callback:
+            self.analysis_callback('auto_analysis_toggle', self.auto_analysis_enabled)
+    
+    def _toggle_auto_execute(self):
+        """Toggle auto execute on/off"""
+        self.auto_execute_enabled = not self.auto_execute_enabled
+        
+        if self.auto_execute_enabled:
+            self.auto_execute_button.config(text="🤖 Execute: ON")
+            if self.log_callback:
+                self.log_callback("🤖 Auto execute Cosmos commands ENABLED")
+        else:
+            self.auto_execute_button.config(text="🤖 Execute: OFF")
+            if self.log_callback:
+                self.log_callback("🤖 Auto execute Cosmos commands DISABLED")
+        
+        # Notify the parent about auto execute state change
+        if self.analysis_callback:
+            self.analysis_callback('auto_execute_toggle', self.auto_execute_enabled)
 
     def _request_analysis(self):
         """Request Cosmos-Transfer1 analysis"""
@@ -680,19 +731,59 @@ class CosmosAnalysisPanel:
         if self.result_text:
             self.result_text.config(state=tk.NORMAL)
             self.result_text.delete('1.0', tk.END)
+            
+            # Configure bold tag for movement commands
+            self.result_text.tag_configure("bold", font=("TkDefaultFont", 10, "bold"))
 
-            # Format the result
-            result_text = f"Analysis Result:\n"
-            result_text += f"Success: {result_data.get('success', False)}\n"
-            result_text += f"Analysis: {result_data.get('analysis_result', 'N/A')}\n"
+            # Insert formatted result
+            self.result_text.insert(tk.END, "Analysis Result:\n")
+            self.result_text.insert(tk.END, f"Success: {result_data.get('success', False)}\n")
+            self.result_text.insert(tk.END, f"Analysis: {result_data.get('analysis_result', 'N/A')}\n")
 
+            # Handle navigation commands with bold formatting
             if result_data.get('navigation_commands'):
-                result_text += f"\nNavigation: {result_data['navigation_commands']}\n"
+                self.result_text.insert(tk.END, "\nNavigation: ")
+                
+                # Parse navigation commands to find movement commands
+                nav_commands = result_data['navigation_commands']
+                nav_text = str(nav_commands)
+                
+                # Look for common movement commands and make them bold
+                movement_commands = ['move_forward', 'move_backward', 'turn_left', 'turn_right', 'stop', 'strafe_left', 'strafe_right']
+                
+                # Insert navigation text with bold movement commands
+                remaining_text = nav_text
+                while remaining_text:
+                    # Find the next movement command
+                    earliest_pos = len(remaining_text)
+                    earliest_cmd = None
+                    
+                    for cmd in movement_commands:
+                        pos = remaining_text.find(cmd)
+                        if pos != -1 and pos < earliest_pos:
+                            earliest_pos = pos
+                            earliest_cmd = cmd
+                    
+                    if earliest_cmd:
+                        # Insert text before the command normally
+                        if earliest_pos > 0:
+                            self.result_text.insert(tk.END, remaining_text[:earliest_pos])
+                        
+                        # Insert the movement command in bold
+                        self.result_text.insert(tk.END, earliest_cmd, "bold")
+                        
+                        # Continue with the rest of the text
+                        remaining_text = remaining_text[earliest_pos + len(earliest_cmd):]
+                    else:
+                        # No more movement commands, insert the rest normally
+                        self.result_text.insert(tk.END, remaining_text)
+                        break
+                
+                self.result_text.insert(tk.END, "\n")
 
-            result_text += f"\nConfidence: {result_data.get('confidence', 0.0)}\n"
-            result_text += f"Timestamp: {result_data.get('timestamp_ns', 0)}\n"
+            self.result_text.insert(tk.END, f"\nConfidence: {result_data.get('confidence', 0.0)}\n")
+            self.result_text.insert(tk.END, f"Timestamp: {result_data.get('timestamp_ns', 0)}\n")
 
-            self.result_text.insert(tk.END, result_text)
             self.result_text.config(state=tk.DISABLED)
 
     def clear_results(self):

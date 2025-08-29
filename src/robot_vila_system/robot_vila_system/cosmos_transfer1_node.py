@@ -66,6 +66,12 @@ class CosmosTransfer1Node(Node):
         self.processor = None
         self.model_loaded = False
         
+        # Sensor and image data caching
+        self.current_sensor_data = None
+        self.current_camera_image = None
+        self.sensor_data_lock = threading.Lock()
+        self.camera_image_lock = threading.Lock()
+        
         # Direct image processing (no cv_bridge needed for now)
         
         # Device setup
@@ -88,6 +94,7 @@ class CosmosTransfer1Node(Node):
         # Setup ROS2 interfaces
         self._setup_services()
         self._setup_publishers()
+        self._setup_subscribers()
         
         # Load model in background
         self._load_model_async()
@@ -138,6 +145,37 @@ class CosmosTransfer1Node(Node):
             '/cosmos/status',
             self.reliable_qos
         )
+        
+        self.get_logger().info("📡 Publishers configured:")
+        self.get_logger().info("   └── /cosmos/analysis")
+        self.get_logger().info("   └── /cosmos/status")
+    
+    def _setup_subscribers(self):
+        """Setup ROS2 subscribers for multimodal data"""
+        # Subscribe to sensor data with compatible QoS
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            depth=10
+        )
+        self.sensor_subscriber = self.create_subscription(
+            SensorData,
+            '/robot/sensors',
+            self._sensor_data_callback,
+            sensor_qos
+        )
+        
+        # Subscribe to camera images
+        self.camera_subscriber = self.create_subscription(
+            ROSImage,
+            '/realsense/camera/color/image_raw',
+            self._camera_image_callback,
+            self.image_qos
+        )
+        
+        self.get_logger().info("📡 Subscribers configured:")
+        self.get_logger().info("   └── /robot/sensors (SensorData)")
+        self.get_logger().info("   └── /realsense/camera/color/image_raw (Image)")
     
     def _load_model_async(self):
         """Load Cosmos model in background thread"""
@@ -252,8 +290,13 @@ class CosmosTransfer1Node(Node):
 
             # Use actual Cosmos-Transfer1 model for analysis
             # Get current camera image and sensor data
-            current_image = None  # TODO: Get from camera topic
+            current_image = self._get_current_camera_image()
             sensor_data = self._get_current_sensor_data()
+            
+            # Log multimodal data availability
+            image_status = f"Image: {current_image.size if current_image else 'NONE'}"
+            sensor_status = f"Sensors: F={sensor_data.get('distance_front', 'N/A')}, L={sensor_data.get('distance_left', 'N/A')}, R={sensor_data.get('distance_right', 'N/A')}"
+            self.get_logger().debug(f"📊 Multimodal data - {image_status} | {sensor_status}")
             
             # Extract prompt from source_node field (temporary workaround)
             source_parts = request.command.source_node.split('|', 1)
@@ -262,8 +305,15 @@ class CosmosTransfer1Node(Node):
             analysis_result = self._analyze_scene_with_cosmos(current_image, prompt, sensor_data)
 
             # Fill response - ExecuteCommand.Response only has success and result_message
+            # Pack navigation commands into the result message as JSON
+            result_data = {
+                'analysis': analysis_result.get('analysis', 'Analysis complete'),
+                'navigation_commands': analysis_result.get('navigation_commands', {'action': 'stop', 'confidence': 0.0}),
+                'confidence': analysis_result.get('confidence', 0.0)
+            }
+            
             response.success = analysis_result['success']
-            response.result_message = analysis_result.get('analysis', 'Analysis complete')
+            response.result_message = json.dumps(result_data)
             
             # Publish analysis results as RobotCommand
             command_msg = RobotCommand()
@@ -283,18 +333,78 @@ class CosmosTransfer1Node(Node):
         
         return response
     
+    def _sensor_data_callback(self, msg: SensorData):
+        """Handle incoming sensor data"""
+        with self.sensor_data_lock:
+            self.current_sensor_data = {
+                'distance_front': msg.distance_front,
+                'distance_left': msg.distance_left,
+                'distance_right': msg.distance_right,
+                'battery_voltage': msg.battery_voltage,
+                'cpu_temp': msg.cpu_temp,
+                'cpu_usage': msg.cpu_usage,
+                'timestamp': msg.timestamp_ns
+            }
+            self.get_logger().debug(f"📊 Updated sensor data: front={msg.distance_front:.2f}m, left={msg.distance_left:.2f}m, right={msg.distance_right:.2f}m")
+    
+    def _camera_image_callback(self, msg: ROSImage):
+        """Handle incoming camera images"""
+        try:
+            # Convert ROS Image to PIL Image
+            pil_image = self._ros_image_to_pil(msg)
+            
+            with self.camera_image_lock:
+                self.current_camera_image = pil_image
+                
+            self.get_logger().debug(f"📸 Updated camera image: {msg.width}x{msg.height} ({msg.encoding})")
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ Error processing camera image: {e}")
+    
+    def _ros_image_to_pil(self, ros_image: ROSImage) -> Image.Image:
+        """Convert ROS Image message to PIL Image"""
+        import numpy as np
+        
+        # Convert ROS image data to numpy array
+        np_image = np.frombuffer(ros_image.data, dtype=np.uint8)
+        
+        if ros_image.encoding == "rgb8":
+            rgb_array = np_image.reshape((ros_image.height, ros_image.width, 3))
+        elif ros_image.encoding == "bgr8":
+            bgr_array = np_image.reshape((ros_image.height, ros_image.width, 3))
+            rgb_array = bgr_array[:, :, ::-1]  # Convert BGR to RGB
+        else:
+            # Default to RGB8 interpretation
+            rgb_array = np_image.reshape((ros_image.height, ros_image.width, 3))
+        
+        return Image.fromarray(rgb_array, 'RGB')
+    
     def _get_current_sensor_data(self) -> Dict[str, float]:
         """Get current sensor data from robot"""
-        # TODO: Subscribe to sensor topics and cache latest data
-        # For now, return placeholder data - this needs real sensor integration
-        return {
-            'distance_front': 2.5,
-            'distance_left': 1.8,
-            'distance_right': 2.1,
-            'battery_voltage': 12.4,
-            'cpu_temp': 45.2,
-            'cpu_usage': 35.0
-        }
+        with self.sensor_data_lock:
+            if self.current_sensor_data is not None:
+                return self.current_sensor_data.copy()
+            else:
+                # Return safe defaults if no sensor data available
+                self.get_logger().warn("⚠️ No sensor data available, using defaults")
+                return {
+                    'distance_front': 999.0,  # Large distance = safe
+                    'distance_left': 999.0,
+                    'distance_right': 999.0,
+                    'battery_voltage': 12.0,
+                    'cpu_temp': 50.0,
+                    'cpu_usage': 50.0
+                }
+    
+    def _get_current_camera_image(self) -> Optional[Image.Image]:
+        """Get current camera image"""
+        with self.camera_image_lock:
+            if self.current_camera_image is not None:
+                return self.current_camera_image.copy()
+            else:
+                # Don't log debug message for missing camera - too verbose
+                pass
+                return None
     
     def _analyze_scene_with_cosmos(self, image: Image.Image, prompt: str, sensor_data: Dict[str, float]) -> Dict[str, Any]:
         """Analyze scene using actual Cosmos-Transfer1 model"""
@@ -344,7 +454,7 @@ class CosmosTransfer1Node(Node):
     def _run_cosmos_inference(self, image: Image.Image, prompt: str, sensor_data: Dict[str, float]) -> Dict[str, Any]:
         """Run actual Cosmos-Transfer1 model inference"""
         try:
-            self.get_logger().info("🔥 Running Cosmos-Transfer1 model inference...")
+            self.get_logger().debug("🔥 Running Cosmos-Transfer1 model inference...")
             
             # Use the loaded model state and control models for real inference
             # This implements the actual Cosmos model processing
@@ -359,7 +469,7 @@ class CosmosTransfer1Node(Node):
     def _intelligent_scene_analysis(self, image: Image.Image, prompt: str, sensor_data: Dict[str, float]) -> Dict[str, Any]:
         """Real scene analysis using loaded Cosmos model context and sensor fusion"""
         try:
-            self.get_logger().info("🧠 Performing intelligent scene analysis with Cosmos context...")
+            self.get_logger().debug("🧠 Performing intelligent multimodal scene analysis with Cosmos context...")
             
             # Extract sensor data
             front_dist = sensor_data.get('distance_front', 999.0)
@@ -369,8 +479,14 @@ class CosmosTransfer1Node(Node):
             # Analyze the prompt for navigation intent
             prompt_lower = prompt.lower()
             
-            # Multi-factor analysis combining sensors, loaded model context, and prompt
+            # Multi-factor analysis combining IMAGE, sensors, loaded model context, and prompt
             analysis_factors = []
+            
+            # Image analysis (if available)
+            image_analysis = self._analyze_image_content(image) if image else None
+            if image_analysis:
+                analysis_factors.append(f"Visual analysis: {image_analysis['description']}")
+                self.get_logger().debug(f"📸 Image analysis: {image_analysis['description']}")
             
             # Sensor analysis with Cosmos-enhanced reasoning
             if front_dist < 0.5:
@@ -410,15 +526,28 @@ class CosmosTransfer1Node(Node):
                 intent_action = safety_action
                 analysis_factors.append("Using Cosmos-enhanced sensor-based decision")
             
-            # Final decision: prioritize safety over intent
+            # Multimodal decision fusion: combine visual and sensor analysis
+            if image_analysis and image_analysis.get('obstacles_detected'):
+                # Visual analysis detected obstacles - enhance safety measures
+                visual_safety_factor = 0.9
+                analysis_factors.append("Visual obstacle detection confirms sensor readings")
+            elif image_analysis and image_analysis.get('path_clear'):
+                # Visual analysis shows clear path - boost confidence
+                visual_safety_factor = 1.1
+                analysis_factors.append("Visual analysis confirms clear path")
+            else:
+                # No visual analysis or neutral result
+                visual_safety_factor = 1.0
+            
+            # Final decision: prioritize safety over intent, enhanced by visual data
             if safety_action == "stop":
                 final_action = "stop"
-                final_confidence = confidence
-                reasoning = "Safety override with Cosmos context: " + "; ".join(analysis_factors)
+                final_confidence = min(confidence * visual_safety_factor, 0.95)
+                reasoning = "Multimodal safety override (sensors + vision): " + "; ".join(analysis_factors)
             else:
                 final_action = intent_action
-                final_confidence = min(confidence, 0.85)
-                reasoning = "Cosmos-enhanced integrated analysis: " + "; ".join(analysis_factors)
+                final_confidence = min(confidence * visual_safety_factor, 0.90)
+                reasoning = "Cosmos multimodal integrated analysis (sensors + vision + intent): " + "; ".join(analysis_factors)
             
             return {
                 'description': f"Cosmos-Transfer1 real-time scene analysis completed",
@@ -432,6 +561,86 @@ class CosmosTransfer1Node(Node):
         except Exception as e:
             self.get_logger().error(f"Intelligent scene analysis error: {e}")
             raise
+    
+    def _analyze_image_content(self, image: Image.Image) -> Dict[str, Any]:
+        """Analyze image content for navigation-relevant features"""
+        try:
+            if image is None:
+                return {'description': 'No image available', 'obstacles_detected': False, 'path_clear': False}
+            
+            self.get_logger().debug(f"📸 Analyzing image: {image.size}")
+            
+            # Convert PIL image to numpy for basic computer vision analysis
+            import numpy as np
+            image_array = np.array(image)
+            
+            # Basic image analysis using computer vision techniques
+            # This is a simplified implementation - in a full Cosmos model, this would use
+            # the actual vision transformer components
+            
+            height, width = image_array.shape[:2]
+            
+            # Analyze image brightness and contrast (basic obstacle detection proxy)
+            gray = np.mean(image_array, axis=2) if len(image_array.shape) == 3 else image_array
+            
+            # Simple obstacle detection based on image characteristics
+            # Dark areas in the lower portion might indicate obstacles
+            lower_third = gray[2*height//3:, :]
+            upper_third = gray[:height//3, :]
+            
+            lower_brightness = np.mean(lower_third)
+            upper_brightness = np.mean(upper_third)
+            
+            # Basic edge detection proxy - high contrast areas might be obstacles
+            brightness_variance = np.var(lower_third)
+            
+            # Heuristic-based analysis (this would be replaced by actual Cosmos vision model)
+            obstacles_detected = False
+            path_clear = False
+            
+            if lower_brightness < 80 and brightness_variance > 1000:
+                obstacles_detected = True
+                description = f"Potential obstacles detected in lower field of view (brightness: {lower_brightness:.1f})"
+            elif lower_brightness > 120 and brightness_variance < 500:
+                path_clear = True
+                description = f"Clear path detected in lower field of view (brightness: {lower_brightness:.1f})"
+            else:
+                description = f"Neutral visual analysis (brightness: {lower_brightness:.1f}, variance: {brightness_variance:.1f})"
+            
+            # Color analysis - look for typical outdoor/indoor navigation cues
+            if len(image_array.shape) == 3:
+                # Analyze color distribution
+                rgb_means = np.mean(image_array, axis=(0, 1))
+                
+                # Green dominance might indicate outdoor grass/vegetation
+                if rgb_means[1] > rgb_means[0] + 20 and rgb_means[1] > rgb_means[2] + 20:
+                    description += " | Outdoor vegetation detected"
+                    path_clear = True  # Grass usually means navigable terrain
+                
+                # Blue dominance in upper portion might indicate sky (outdoor)
+                upper_rgb = np.mean(upper_third[:, :, np.newaxis] * image_array[:height//3, :, :], axis=(0, 1))
+                if len(upper_rgb) > 2 and upper_rgb[2] > upper_rgb[0] + 30:
+                    description += " | Sky detected (outdoor environment)"
+            
+            return {
+                'description': description,
+                'obstacles_detected': obstacles_detected,
+                'path_clear': path_clear,
+                'image_size': image.size,
+                'brightness_analysis': {
+                    'lower_brightness': float(lower_brightness),
+                    'upper_brightness': float(upper_brightness),
+                    'variance': float(brightness_variance)
+                }
+            }
+            
+        except Exception as e:
+            self.get_logger().error(f"Image analysis error: {e}")
+            return {
+                'description': f'Image analysis failed: {str(e)}',
+                'obstacles_detected': False,
+                'path_clear': False
+            }
     
     def _extract_navigation_commands(self, inference_result: Dict[str, Any], sensor_data: Dict[str, float]) -> Dict[str, Any]:
         """Extract navigation commands from Cosmos inference result"""
@@ -563,17 +772,31 @@ Analyze the scene and provide navigation guidance considering both visual and Li
 def main(args=None):
     rclpy.init(args=args)
     
+    node = None
     try:
         node = CosmosTransfer1Node()
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        logger.debug("🛑 Received shutdown signal")
     except Exception as e:
         logger.error(f"Node error: {e}")
     finally:
-        if 'node' in locals():
-            node.destroy_node()
-        rclpy.shutdown()
+        # Clean shutdown
+        try:
+            if node is not None:
+                node.destroy_node()
+                logger.debug("✅ Node destroyed cleanly")
+        except Exception as e:
+            logger.warning(f"⚠️ Node destruction warning: {e}")
+        
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+                logger.debug("✅ ROS2 shutdown cleanly")
+        except Exception as e:
+            logger.warning(f"⚠️ ROS2 shutdown warning: {e}")
+        
+        logger.debug("👋 Cosmos node exited")
 
 if __name__ == '__main__':
     main()
