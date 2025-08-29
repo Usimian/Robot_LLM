@@ -54,10 +54,10 @@ class SystemStatusPanel:
         self.status_labels['cpu_usage'].grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
 
         # Right Column
-        # Cosmos-Transfer1 status
-        ttk.Label(parent, text="🌌 Cosmos:", font=('TkDefaultFont', 10, 'bold')).grid(row=0, column=2, sticky=tk.W, padx=15, pady=2)
-        self.status_labels['cosmos'] = ttk.Label(parent, text=GUIConfig.OFFLINE_TEXT, foreground=GUIConfig.COLORS['error'], font=('TkDefaultFont', 10, 'bold'))
-        self.status_labels['cosmos'].grid(row=0, column=3, sticky=tk.W, padx=5, pady=2)
+        # VLM Model status
+        ttk.Label(parent, text="🤖 Model:", font=('TkDefaultFont', 10, 'bold')).grid(row=0, column=2, sticky=tk.W, padx=15, pady=2)
+        self.status_labels['model'] = ttk.Label(parent, text="Loading...", foreground=GUIConfig.COLORS['warning'], font=('TkDefaultFont', 10, 'bold'))
+        self.status_labels['model'].grid(row=0, column=3, sticky=tk.W, padx=5, pady=2)
 
         # Movement status
         ttk.Label(parent, text="🚶 Movement:", font=('TkDefaultFont', 10, 'bold')).grid(row=1, column=2, sticky=tk.W, padx=15, pady=2)
@@ -120,12 +120,18 @@ class SystemStatusPanel:
         # that were previously done by the old monolithic methods
         pass
 
-    def update_cosmos_status(self, status_data: Dict[str, Any]):
-        """Update Cosmos status display"""
+    def update_model_status(self, status_data: Dict[str, Any]):
+        """Update VLM Model status display"""
         try:
             # Determine status based on model_loaded flag
             if status_data.get('model_loaded', False):
-                status_text = "Online"
+                # Show actual model name when loaded
+                model_name = status_data.get('model_name', 'Qwen2-VL-7B-Instruct')
+                # Shorten the name for display
+                if 'Qwen2-VL-7B-Instruct' in model_name:
+                    status_text = "Qwen2-VL-7B"
+                else:
+                    status_text = model_name.split('/')[-1]  # Get last part after slash
                 color = GUIConfig.COLORS['success']
             elif status_data.get('status') == 'model_load_failed':
                 status_text = "Error"
@@ -134,14 +140,14 @@ class SystemStatusPanel:
                 status_text = "Loading..."
                 color = GUIConfig.COLORS['warning']
             else:
-                status_text = "Offline"
-                color = GUIConfig.COLORS['error']
+                status_text = "Loading..."
+                color = GUIConfig.COLORS['warning']
 
-            self.status_labels['cosmos'].config(text=status_text, foreground=color)
+            self.status_labels['model'].config(text=status_text, foreground=color)
 
         except Exception as e:
-            logger.error(f"Error updating Cosmos status: {e}")
-            self.status_labels['cosmos'].config(text="Error", foreground=GUIConfig.COLORS['error'])
+            logger.error(f"Error updating Model status: {e}")
+            self.status_labels['model'].config(text="Error", foreground=GUIConfig.COLORS['error'])
 
 
 class MovementControlPanel:
@@ -585,8 +591,8 @@ class ActivityLogPanel:
             self.log_text.config(state=tk.DISABLED)
 
 
-class CosmosAnalysisPanel:
-    """Handles Cosmos-Transfer1 analysis panel"""
+class VLMAnalysisPanel:
+    """Handles analysis panel"""
 
     def __init__(self, parent, analysis_callback: Callable, log_callback: Callable):
         self.parent = parent
@@ -598,18 +604,18 @@ class CosmosAnalysisPanel:
         self.auto_toggle_button = None
 
     def create(self, parent):
-        """Create the Cosmos-Transfer1 analysis panel"""
+        """Create the analysis panel"""
         # Main Cosmos frame
-        cosmos_frame = ttk.LabelFrame(parent, text="🌌 Cosmos-Transfer1 Analysis", padding=10)
-        cosmos_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        vlm_frame = ttk.LabelFrame(parent, text="🤖 VLM Analysis", padding=10)
+        vlm_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
 
         # Create analysis controls
-        self._create_analysis_controls(cosmos_frame)
+        self._create_analysis_controls(vlm_frame)
 
         # Create result display
-        self._create_result_display(cosmos_frame)
+        self._create_result_display(vlm_frame)
 
-        return cosmos_frame
+        return vlm_frame
 
     def _create_analysis_controls(self, parent):
         """Create analysis control buttons and prompt input"""
@@ -627,10 +633,10 @@ class CosmosAnalysisPanel:
         self.auto_toggle_button.pack(side=tk.LEFT, padx=5)
         
         # Auto execute toggle button
-        self.auto_execute_enabled = True  # Default enabled
+        self.auto_execute_enabled = False  # Default disabled for safety
         self.auto_execute_button = ttk.Button(
             controls_frame,
-            text="🤖 Execute: ON",
+            text="🤖 Execute: OFF",  # Start with OFF to match default state
             command=self._toggle_auto_execute,
             style='AutoToggle.TButton'
         )
@@ -679,11 +685,11 @@ class CosmosAnalysisPanel:
         if self.auto_analysis_enabled:
             self.auto_toggle_button.config(text="🔄 Auto: ON")
             if self.log_callback:
-                self.log_callback("🔄 Auto Cosmos analysis ENABLED")
+                self.log_callback("🔄 Auto VLM analysis ENABLED")
         else:
             self.auto_toggle_button.config(text="🔄 Auto: OFF")
             if self.log_callback:
-                self.log_callback("🔄 Auto Cosmos analysis DISABLED")
+                self.log_callback("🔄 Auto VLM analysis DISABLED")
         
         # Notify the parent about auto analysis state change
         if self.analysis_callback:
@@ -696,18 +702,18 @@ class CosmosAnalysisPanel:
         if self.auto_execute_enabled:
             self.auto_execute_button.config(text="🤖 Execute: ON")
             if self.log_callback:
-                self.log_callback("🤖 Auto execute Cosmos commands ENABLED")
+                self.log_callback("🤖 Auto execute VLM commands ENABLED")
         else:
             self.auto_execute_button.config(text="🤖 Execute: OFF")
             if self.log_callback:
-                self.log_callback("🤖 Auto execute Cosmos commands DISABLED")
+                self.log_callback("🤖 Auto execute VLM commands DISABLED")
         
         # Notify the parent about auto execute state change
         if self.analysis_callback:
             self.analysis_callback('auto_execute_toggle', self.auto_execute_enabled)
 
     def _request_analysis(self):
-        """Request Cosmos-Transfer1 analysis"""
+        """Request analysis"""
         if not hasattr(self, 'prompt_text') or not self.prompt_text:
             return
 
@@ -733,9 +739,8 @@ class CosmosAnalysisPanel:
             self.result_text.tag_configure("bold", font=("TkDefaultFont", 10, "bold"))
 
             # Insert formatted result
-            self.result_text.insert(tk.END, "Analysis Result:\n")
             self.result_text.insert(tk.END, f"Success: {result_data.get('success', False)}\n")
-            self.result_text.insert(tk.END, f"Analysis: {result_data.get('analysis_result', 'N/A')}\n")
+            self.result_text.insert(tk.END, f"{result_data.get('analysis_result', 'N/A')}\n")
 
             # Handle navigation commands with bold formatting
             if result_data.get('navigation_commands'):

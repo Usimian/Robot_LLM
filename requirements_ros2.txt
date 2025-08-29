@@ -7,15 +7,15 @@ opencv-python>=4.5.0      # Computer vision
 Pillow>=8.0.0             # Image processing
 dataclasses>=0.6          # Data structures (Python 3.7+)
 
-# VILA dependencies (keep existing)
-torch>=1.9.0
-torchvision>=0.10.0
-transformers>=4.20.0
-accelerate>=0.20.0
-tokenizers>=0.13.0
-sentencepiece>=0.1.97
-shortuuid>=1.0.0
-httpx>=0.24.0
+# Local VLM dependencies (Qwen2-VL)
+torch>=2.0.0              # PyTorch for deep learning
+torchvision>=0.15.0       # Vision utilities
+transformers>=4.45.0      # Hugging Face transformers (for Qwen2-VL)
+accelerate>=0.25.0        # Model acceleration
+tokenizers>=0.15.0        # Fast tokenizers
+Pillow>=9.0.0            # Image processing (updated)
+qwen-vl-utils>=0.0.4     # Qwen2-VL utilities
+flash-attn>=2.4.0        # Flash attention (optional, for speed)
 
 # Logging and monitoring
 psutil>=5.8.0            # System monitoring

@@ -33,7 +33,7 @@ from .gui_components import (
     SystemStatusPanel,
     MovementControlPanel,
     CameraPanel,
-    CosmosAnalysisPanel,
+    VLMAnalysisPanel,
     ActivityLogPanel
 )
 
@@ -130,11 +130,11 @@ class RobotGUIROS2Node(Node):
             self.reliable_qos
         )
 
-        # Cosmos status updates
-        self.cosmos_status_subscriber = self.create_subscription(
+        # VLM Model status updates
+        self.model_status_subscriber = self.create_subscription(
             String,
-            '/cosmos/status',
-            self._cosmos_status_callback,
+            '/vlm/status',
+            self._model_status_callback,
             self.reliable_qos
         )
     
@@ -197,14 +197,14 @@ class RobotGUIROS2Node(Node):
         }
         self.gui_callback('command_ack', ack_data)
 
-    def _cosmos_status_callback(self, msg: String):
-        """Handle Cosmos status updates"""
+    def _model_status_callback(self, msg: String):
+        """Handle VLM Model status updates"""
         try:
             import json
             status_data = json.loads(msg.data)
-            self.gui_callback('cosmos_status', status_data)
+            self.gui_callback('model_status', status_data)
         except Exception as e:
-            self.get_logger().error(f"Error parsing Cosmos status: {e}")
+            self.get_logger().error(f"Error parsing Model status: {e}")
     # VILA status removed - using Cosmos-Transfer1 directly
     
     def send_robot_command(self, command_type: str, parameters: Dict = None, safety_confirmed: bool = False):
@@ -344,7 +344,7 @@ class RobotGUIROS2:
         # Auto Cosmos analysis
         self.auto_cosmos_enabled = False
         self.auto_cosmos_timer = None
-        self.auto_execute_enabled = True  # Default: execute Cosmos recommendations
+        self.auto_execute_enabled = False  # Default: do not auto-execute for safety
 
         # Threading and queues
         self.update_queue = queue.Queue()
@@ -367,9 +367,9 @@ class RobotGUIROS2:
             self.camera_panel = CameraPanel(self.root, self._handle_camera_update)
             logger.debug("✅ CameraPanel created")
 
-            logger.debug("🔧 Creating CosmosAnalysisPanel...")
-            self.cosmos_panel = CosmosAnalysisPanel(self.root, self._handle_cosmos_analysis, self.log_message)
-            logger.debug("✅ CosmosAnalysisPanel created")
+            logger.debug("🔧 Creating VLMAnalysisPanel...")
+            self.vlm_panel = VLMAnalysisPanel(self.root, self._handle_vlm_analysis, self.log_message)
+            logger.debug("✅ VLMAnalysisPanel created")
 
             logger.debug("🔧 Creating ActivityLogPanel...")
             self.log_panel = ActivityLogPanel(self.root)
@@ -440,10 +440,10 @@ class RobotGUIROS2:
             self.camera_panel.create(middle_frame)
             logger.debug("✅ Camera panel created")
 
-            # Right column: Cosmos-Transfer1 Analysis
-            logger.debug("🔧 Creating Cosmos analysis panel...")
-            self.cosmos_panel.create(middle_frame)
-            logger.debug("✅ Cosmos analysis panel created")
+            # Right column: Analysis
+            logger.debug("🔧 Creating VLM analysis panel...")
+            self.vlm_panel.create(middle_frame)
+            logger.debug("✅ VLM analysis panel created")
 
             # Bottom section: Activity Log
             logger.debug("🔧 Creating activity log panel...")
@@ -627,8 +627,8 @@ class RobotGUIROS2:
                 self._handle_navigation_commands(data)
             elif message_type == 'movement_status':
                 self._handle_movement_status(data)
-            elif message_type == 'cosmos_status':
-                self._handle_cosmos_status(data)
+            elif message_type == 'model_status':
+                self._handle_model_status(data)
             elif message_type == 'command_ack':
                 self._handle_command_ack(data)
             else:
@@ -694,10 +694,10 @@ class RobotGUIROS2:
         if hasattr(self, 'system_panel'):
             self.system_panel.update_robot_status({'movement_enabled': self.movement_enabled})
 
-    def _handle_cosmos_status(self, data):
-        """Handle Cosmos status updates"""
+    def _handle_model_status(self, data):
+        """Handle VLM Model status updates"""
         if hasattr(self, 'system_panel'):
-            self.system_panel.update_cosmos_status(data)
+            self.system_panel.update_model_status(data)
 
     def _handle_command_ack(self, data):
         """Handle command acknowledgments"""
@@ -824,8 +824,8 @@ class RobotGUIROS2:
         # Use the same simple cleanup as window close
         self._cleanup_simple()
 
-    def _handle_cosmos_analysis(self, event_type: str, data):
-        """Handle Cosmos-Transfer1 analysis events"""
+    def _handle_vlm_analysis(self, event_type: str, data):
+        """Handle analysis events"""
         if event_type == 'load_image':
             self._load_image_file_for_cosmos(data)
         elif event_type == 'request_analysis':
@@ -862,20 +862,20 @@ class RobotGUIROS2:
             self.loaded_image = None
 
     def _request_cosmos_analysis(self, prompt: str):
-        """Request Cosmos-Transfer1 analysis"""
+        """Request analysis"""
         try:
             # Use the ROS2 node to send real analysis request to Cosmos service
             if hasattr(self, 'ros_node'):
-                self.log_message(f"🔍 Cosmos analysis requested: {prompt[:50]}...")
+                self.log_message(f"🔍 VLM analysis requested: {prompt[:50]}...")
                 
                 # Call the actual Cosmos service
-                # Create Cosmos service client if it doesn't exist
-                if not hasattr(self.ros_node, 'cosmos_client'):
+                # Create VLM service client if it doesn't exist
+                if not hasattr(self.ros_node, 'vlm_client'):
                     from robot_msgs.srv import ExecuteCommand
-                    self.ros_node.cosmos_client = self.ros_node.create_client(ExecuteCommand, '/cosmos/request_analysis')
+                    self.ros_node.vlm_client = self.ros_node.create_client(ExecuteCommand, '/vlm/analyze_scene')
                 
-                if not self.ros_node.cosmos_client.wait_for_service(timeout_sec=1.0):
-                    self.log_message("❌ Cosmos analysis service not available")
+                if not self.ros_node.vlm_client.wait_for_service(timeout_sec=1.0):
+                    self.log_message("❌ VLM analysis service not available")
                     return
                 
                 # Create service request for Cosmos analysis
@@ -884,7 +884,7 @@ class RobotGUIROS2:
                 
                 command_msg = RobotCommand()
                 command_msg.robot_id = self.robot_id
-                command_msg.command_type = "cosmos_analysis"
+                command_msg.command_type = "vlm_analysis"
                 # Use source_node field to pass the prompt (temporary workaround)
                 command_msg.source_node = f"{self.ros_node.get_name()}|{prompt}"
                 command_msg.timestamp_ns = self.ros_node.get_clock().now().nanoseconds
@@ -892,10 +892,10 @@ class RobotGUIROS2:
                 request = ExecuteCommand.Request()
                 request.command = command_msg
 
-                self.log_message(f"📡 Calling Cosmos analysis service...")
+                self.log_message(f"📡 Calling VLM analysis service...")
                 
                 # Call service asynchronously
-                future = self.ros_node.cosmos_client.call_async(request)
+                future = self.ros_node.vlm_client.call_async(request)
                 
                 # Handle response in callback
                 def handle_cosmos_response(future):
@@ -939,7 +939,7 @@ class RobotGUIROS2:
                                 else:
                                     self.log_message(f"📋 Cosmos recommends: {action} (confidence: {confidence:.2f}) - Auto-execute disabled")
                                 
-                                self.log_message(f"✅ Cosmos analysis: {analysis_text[:80]}...")
+                                self.log_message(f"✅ VLM analysis: {analysis_text[:80]}...")
                                 
                             except json.JSONDecodeError as e:
                                 self.log_message(f"❌ Error parsing Cosmos JSON response: {e}")
@@ -974,16 +974,16 @@ class RobotGUIROS2:
                                     'timestamp_ns': self.ros_node.get_clock().now().nanoseconds
                                 }
                         else:
-                            self.log_message(f"❌ Cosmos analysis failed: {response.result_message}")
+                            self.log_message(f"❌ VLM analysis failed: {response.result_message}")
                             
                     except Exception as e:
-                        self.log_message(f"❌ Cosmos service response error: {e}")
+                        self.log_message(f"❌ VLM service response error: {e}")
                 
                 # Add callback for when service call completes
                 future.add_done_callback(handle_cosmos_response)
 
         except Exception as e:
-            self.log_message(f"❌ Cosmos analysis error: {e}")
+            self.log_message(f"❌ VLM analysis error: {e}")
 
     def _toggle_auto_cosmos_analysis(self, enabled: bool):
         """Toggle auto Cosmos analysis on/off"""
@@ -1001,7 +1001,7 @@ class RobotGUIROS2:
         if self.auto_cosmos_timer:
             self.root.after_cancel(self.auto_cosmos_timer)
         
-        # Start timer for automatic analysis every 5 seconds
+        # Start timer for automatic analysis using configurable interval
         self._schedule_auto_cosmos_analysis()
     
     def _stop_auto_cosmos_timer(self):
@@ -1015,8 +1015,11 @@ class RobotGUIROS2:
         if self.auto_cosmos_enabled:
             # Perform analysis
             self._auto_cosmos_analysis()
-            # Schedule next analysis in 5 seconds
-            self.auto_cosmos_timer = self.root.after(5000, self._schedule_auto_cosmos_analysis)
+            # Schedule next analysis using configurable interval
+            # Use COSMOS_AUTO_INTERVAL if available, otherwise fallback to VILA_AUTO_INTERVAL
+            interval_seconds = getattr(GUIConfig, 'COSMOS_AUTO_INTERVAL', getattr(GUIConfig, 'VILA_AUTO_INTERVAL', 1.0))
+            interval_ms = int(interval_seconds * 1000)  # Convert seconds to milliseconds
+            self.auto_cosmos_timer = self.root.after(interval_ms, self._schedule_auto_cosmos_analysis)
     
     def _auto_cosmos_analysis(self):
         """Perform automatic Cosmos analysis"""

@@ -41,7 +41,7 @@ class GUIConfig:
 
     # VILA settings
     DEFAULT_VILA_PROMPT = "Analyze the current camera view for navigation."
-    VILA_AUTO_INTERVAL = 5.0  # seconds
+    COSMOS_AUTO_INTERVAL = 1.0  # seconds
 
     # QoS settings
     IMAGE_QOS_DEPTH = 10

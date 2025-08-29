@@ -8,6 +8,7 @@ try:
         SystemStatusPanel,
         MovementControlPanel,
         CameraPanel,
+        VLMAnalysisPanel,
         ActivityLogPanel
     )
 except ImportError:
