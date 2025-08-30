@@ -101,9 +101,6 @@ class RobotGUIROS2Node(Node):
         )
         self.get_logger().info(f"📸 Created camera subscription with QoS: reliability={self.image_qos.reliability}, durability={self.image_qos.durability}")
         
-        # Cosmos-Transfer1 results (if available)
-        # Analysis handled directly by Cosmos model
-        
         # Navigation commands
         self.navigation_subscriber = self.create_subscription(
             String,
@@ -137,9 +134,6 @@ class RobotGUIROS2Node(Node):
             self._model_status_callback,
             self.reliable_qos
         )
-    
-        # Cosmos-Transfer1 status (if available)
-        # Status handled by Cosmos model directly
     
     def _setup_publishers(self):
         """Setup ROS2 publishers"""
@@ -178,8 +172,6 @@ class RobotGUIROS2Node(Node):
         self.current_camera_image = msg
         self.gui_callback('camera_image', msg)
 
-    # VILA analysis removed - using Cosmos-Transfer1 directly
-    
     def _navigation_commands_callback(self, msg: String):
         """Handle navigation commands"""
         self.gui_callback('navigation_commands', msg.data)
@@ -205,7 +197,6 @@ class RobotGUIROS2Node(Node):
             self.gui_callback('model_status', status_data)
         except Exception as e:
             self.get_logger().error(f"Error parsing Model status: {e}")
-    # VILA status removed - using Cosmos-Transfer1 directly
     
     def send_robot_command(self, command_type: str, parameters: Dict = None, safety_confirmed: bool = False):
         """Send robot command"""
@@ -275,8 +266,6 @@ class RobotGUIROS2Node(Node):
         self.get_logger().info(f"📤 Command sent to robot: {command_type}")
         return future
 
-    # VILA functionality removed - using Cosmos-Transfer1 directly
-
 
 class RobotGUIROS2:
     """Main GUI class using component-based architecture"""
@@ -338,10 +327,10 @@ class RobotGUIROS2:
         self.loaded_image = None
         self.movement_enabled = True
         self._cleanup_requested = False
-        # VILA functionality removed - using Cosmos-Transfer1 directly
+
         self.camera_source = GUIConfig.DEFAULT_CAMERA_SOURCE
         
-        # Auto Cosmos analysis
+        # Auto VLM analysis
         self.auto_cosmos_enabled = False
         self.auto_cosmos_timer = None
         self.auto_execute_enabled = False  # Default: do not auto-execute for safety
@@ -589,8 +578,6 @@ class RobotGUIROS2:
             self.log_message(f"❌ Failed to load image: {e}")
             self.loaded_image = None
 
-    # VILA functionality removed - using Cosmos-Transfer1 directly
-
     def _on_camera_source_change(self):
         """Handle camera source change"""
         if self.camera_source == "loaded":
@@ -704,8 +691,6 @@ class RobotGUIROS2:
         status = "✅ Success" if data['success'] else "❌ Failed"
         self.log_message(f"🤖 Command {data['command_type']}: {status}")
 
-    # VILA functionality removed - using Cosmos-Transfer1 directly
-
     def _update_system_status(self):
         """Update system status display"""
         try:
@@ -740,10 +725,6 @@ class RobotGUIROS2:
                 return 'offline'
 
         return 'Online'
-
-    # VILA functionality removed - using Cosmos-Transfer1 directly
-
-    # Legacy update methods removed - using direct ROS2 callbacks
 
     def log_message(self, message: str):
         """Log message to activity log"""
@@ -835,40 +816,40 @@ class RobotGUIROS2:
         elif event_type == 'auto_execute_toggle':
             self._toggle_auto_execute(data)
         else:
-            logger.warning(f"Unknown Cosmos analysis event: {event_type}")
+            logger.warning(f"Unknown VLM analysis event: {event_type}")
     
     def _toggle_auto_execute(self, enabled: bool):
-        """Toggle auto execute Cosmos recommendations on/off"""
+        """Toggle auto execute VLM recommendations on/off"""
         self.auto_execute_enabled = enabled
         if enabled:
-            self.log_message("🤖 Auto execute Cosmos recommendations enabled")
+            self.log_message("🤖 Auto execute VLM recommendations enabled")
         else:
-            self.log_message("🤖 Auto execute Cosmos recommendations disabled")
+            self.log_message("🤖 Auto execute VLM recommendations disabled")
 
     def _load_image_file_for_cosmos(self, file_path: str):
-        """Load image from file path for Cosmos analysis"""
+        """Load image from file path for VLM analysis"""
         try:
             from PIL import Image
             self.loaded_image = Image.open(file_path)
             filename = file_path.split('/')[-1] if '/' in file_path else file_path
-            self.log_message(f"📁 Image loaded for Cosmos analysis: {filename}")
+            self.log_message(f"📁 Image loaded for VLM analysis: {filename}")
 
             # Update camera panel display only if loaded source is selected
             if hasattr(self, 'camera_panel') and self.camera_source == "loaded":
                 self.camera_panel.update_camera_image(self.loaded_image)
 
         except Exception as e:
-            self.log_message(f"❌ Failed to load image: {e}")
+            self.log_message(f"❌ Failed to load image for VLM analysis: {e}")
             self.loaded_image = None
 
     def _request_cosmos_analysis(self, prompt: str):
         """Request analysis"""
         try:
-            # Use the ROS2 node to send real analysis request to Cosmos service
+            # Use the ROS2 node to send real analysis request to VLM service
             if hasattr(self, 'ros_node'):
                 self.log_message(f"🔍 VLM analysis requested: {prompt[:50]}...")
                 
-                # Call the actual Cosmos service
+                # Call the actual VLM service
                 # Create VLM service client if it doesn't exist
                 if not hasattr(self.ros_node, 'vlm_client'):
                     from robot_msgs.srv import ExecuteCommand
@@ -878,7 +859,7 @@ class RobotGUIROS2:
                     self.log_message("❌ VLM analysis service not available")
                     return
                 
-                # Create service request for Cosmos analysis
+                # Create service request for VLM analysis
                 from robot_msgs.msg import RobotCommand
                 from robot_msgs.srv import ExecuteCommand
                 
@@ -902,7 +883,7 @@ class RobotGUIROS2:
                     try:
                         response = future.result()
                         if response.success:
-                            # Parse the JSON response from Cosmos service
+                            # Parse the JSON response from VLM service
                             try:
                                 import json
                                 result_data = json.loads(response.result_message)
@@ -920,29 +901,29 @@ class RobotGUIROS2:
                                     'timestamp_ns': self.ros_node.get_clock().now().nanoseconds
                                 }
                                 
-                                # Update the Cosmos panel with real results
-                                if hasattr(self, 'cosmos_panel'):
-                                    self.cosmos_panel.update_analysis_result(cosmos_result)
+                                # Update the VLM panel with real results
+                                if hasattr(self, 'vlm_panel'):
+                                    self.vlm_panel.update_analysis_result(cosmos_result)
                                 
                                 # EXECUTE THE RECOMMENDED ACTION (if auto-execute enabled)
                                 if self.auto_execute_enabled:
                                     if action != "stop" and confidence > 0.6:
                                         if self.movement_enabled:
-                                            self.log_message(f"🤖 Executing Cosmos recommendation: {action} (confidence: {confidence:.2f})")
+                                            self.log_message(f"🤖 Executing VLM recommendation: {action} (confidence: {confidence:.2f})")
                                             self.ros_node.send_robot_command(action)
                                         else:
-                                            self.log_message(f"🔒 Movement disabled - Cosmos recommended: {action}")
+                                            self.log_message(f"🔒 Movement disabled - VLM recommended: {action}")
                                     else:
-                                        self.log_message(f"🛑 Cosmos recommends: {action} (confidence: {confidence:.2f})")
+                                        self.log_message(f"🛑 VLM recommends: {action} (confidence: {confidence:.2f})")
                                         if action == "stop":
                                             self.ros_node.send_robot_command("stop")
                                 else:
-                                    self.log_message(f"📋 Cosmos recommends: {action} (confidence: {confidence:.2f}) - Auto-execute disabled")
+                                    self.log_message(f"📋 VLM recommends: {action} (confidence: {confidence:.2f}) - Auto-execute disabled")
                                 
                                 self.log_message(f"✅ VLM analysis: {analysis_text[:80]}...")
                                 
                             except json.JSONDecodeError as e:
-                                self.log_message(f"❌ Error parsing Cosmos JSON response: {e}")
+                                self.log_message(f"❌ Error parsing VLM JSON response: {e}")
                                 # Fallback to text parsing
                                 analysis_text = response.result_message
                                 action = "stop"
@@ -961,11 +942,11 @@ class RobotGUIROS2:
                                     'timestamp_ns': self.ros_node.get_clock().now().nanoseconds
                                 }
                                 
-                                if hasattr(self, 'cosmos_panel'):
-                                    self.cosmos_panel.update_analysis_result(cosmos_result)
+                                if hasattr(self, 'vlm_panel'):
+                                    self.vlm_panel.update_analysis_result(cosmos_result)
                                 
                             except Exception as e:
-                                self.log_message(f"❌ Error processing Cosmos response: {e}")
+                                self.log_message(f"❌ Error processing VLM response: {e}")
                                 cosmos_result = {
                                     'success': False,
                                     'analysis_result': f"Error: {str(e)}",
@@ -986,18 +967,18 @@ class RobotGUIROS2:
             self.log_message(f"❌ VLM analysis error: {e}")
 
     def _toggle_auto_cosmos_analysis(self, enabled: bool):
-        """Toggle auto Cosmos analysis on/off"""
+        """Toggle auto VLM analysis on/off"""
         self.auto_cosmos_enabled = enabled
         
         if enabled:
-            self.log_message("🔄 Auto Cosmos analysis enabled")
+            self.log_message("🔄 Auto VLM analysis enabled")
             self._start_auto_cosmos_timer()
         else:
-            self.log_message("🔄 Auto Cosmos analysis disabled")
+            self.log_message("🔄 Auto VLM analysis disabled")
             self._stop_auto_cosmos_timer()
     
     def _start_auto_cosmos_timer(self):
-        """Start the auto Cosmos analysis timer"""
+        """Start the auto VLM analysis timer"""
         if self.auto_cosmos_timer:
             self.root.after_cancel(self.auto_cosmos_timer)
         
@@ -1005,13 +986,13 @@ class RobotGUIROS2:
         self._schedule_auto_cosmos_analysis()
     
     def _stop_auto_cosmos_timer(self):
-        """Stop the auto Cosmos analysis timer"""
+        """Stop the auto VLM analysis timer"""
         if self.auto_cosmos_timer:
             self.root.after_cancel(self.auto_cosmos_timer)
             self.auto_cosmos_timer = None
     
     def _schedule_auto_cosmos_analysis(self):
-        """Schedule the next auto Cosmos analysis"""
+        """Schedule the next auto VLM analysis"""
         if self.auto_cosmos_enabled:
             # Perform analysis
             self._auto_cosmos_analysis()
@@ -1022,7 +1003,7 @@ class RobotGUIROS2:
             self.auto_cosmos_timer = self.root.after(interval_ms, self._schedule_auto_cosmos_analysis)
     
     def _auto_cosmos_analysis(self):
-        """Perform automatic Cosmos analysis"""
+        """Perform automatic VLM analysis"""
         if self.auto_cosmos_enabled:
             # Use default prompt for auto analysis
             default_prompt = "Analyze the current camera view for navigation."

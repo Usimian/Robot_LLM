@@ -1,4 +1,4 @@
-# ROS2 Cosmos-Transfer1 Robot System Package
+# ROS2 Robot VLM System Package
 
 # Import GUI components to make them available
 try:

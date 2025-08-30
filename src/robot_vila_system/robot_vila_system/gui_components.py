@@ -525,9 +525,6 @@ class CameraPanel:
                 # The callback will be triggered by the calling code if needed
 
 
-# VILAAnalysisPanel removed - using Cosmos-Transfer1 directly
-
-
 class ActivityLogPanel:
     """Handles activity log panel"""
 
@@ -600,12 +597,12 @@ class VLMAnalysisPanel:
         self.log_callback = log_callback
         self.prompt_text = None
         self.result_text = None
+        self.command_label = None
         self.auto_analysis_enabled = False
         self.auto_toggle_button = None
 
     def create(self, parent):
         """Create the analysis panel"""
-        # Main Cosmos frame
         vlm_frame = ttk.LabelFrame(parent, text="🤖 VLM Analysis", padding=10)
         vlm_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
 
@@ -661,6 +658,19 @@ class VLMAnalysisPanel:
         self.prompt_text = tk.Text(prompt_frame, height=3, wrap=tk.WORD)
         self.prompt_text.pack(fill=tk.X, pady=5)
         self.prompt_text.insert(tk.END, GUIConfig.DEFAULT_VILA_PROMPT)
+        
+        # Add single-line command display
+        command_frame = ttk.Frame(parent)
+        command_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(command_frame, text="Current Command:").pack(anchor=tk.W)
+        self.command_label = ttk.Label(
+            command_frame, 
+            text="No command yet", 
+            font=('TkDefaultFont', 10, 'bold'),
+            foreground='blue'
+        )
+        self.command_label.pack(anchor=tk.W, pady=(2, 0))
 
     def _create_result_display(self, parent):
         """Create analysis result display area"""
@@ -731,6 +741,26 @@ class VLMAnalysisPanel:
 
     def update_analysis_result(self, result_data: Dict[str, Any]):
         """Update analysis result display"""
+        # Update single-line command display
+        if self.command_label and result_data.get('navigation_commands'):
+            nav_commands = result_data['navigation_commands']
+            action = nav_commands.get('action', 'unknown')
+            confidence = nav_commands.get('confidence', 0.0)
+            
+            # Format the action nicely
+            action_display = {
+                'move_forward': 'Move Forward',
+                'turn_left': 'Turn Left', 
+                'turn_right': 'Turn Right',
+                'stop': 'Stop',
+                'move_backward': 'Move Backward',
+                'strafe_left': 'Strafe Left',
+                'strafe_right': 'Strafe Right'
+            }.get(action, action.title())
+            
+            command_text = f"{action_display}, Confidence: {confidence:.2f}"
+            self.command_label.config(text=command_text)
+        
         if self.result_text:
             self.result_text.config(state=tk.NORMAL)
             self.result_text.delete('1.0', tk.END)

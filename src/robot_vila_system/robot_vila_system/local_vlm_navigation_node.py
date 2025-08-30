@@ -44,7 +44,7 @@ class LocalVLMNavigationNode(Node):
         
         # Aggressive speed optimization settings
         self.max_image_size = 112  # Reduce to 112x112 for maximum speed (16x fewer pixels than 448x448)
-        self.max_new_tokens = 16   # Reduce to 16 tokens for ultra-fast generation
+        self.max_new_tokens = 32   # Increase to 32 tokens for complete responses
         self.use_cache = True      # Enable KV cache for faster inference
         self.skip_chat_template = True  # Skip expensive chat template processing
         
@@ -156,7 +156,8 @@ class LocalVLMNavigationNode(Node):
                 self.get_logger().info("   └── Loading processor and tokenizer...")
                 self.processor = AutoProcessor.from_pretrained(
                     self.model_name,
-                    trust_remote_code=True
+                    trust_remote_code=True,
+                    use_fast=False  # Use slow processor for consistent outputs
                 )
                 
                 self.tokenizer = AutoTokenizer.from_pretrained(
@@ -169,15 +170,24 @@ class LocalVLMNavigationNode(Node):
                 self.get_logger().info("   └── Loading Qwen2-VL model with speed optimization...")
                 self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                     self.model_name,
-                    torch_dtype=torch.float16,  # Use FP16 for speed and memory efficiency
-                    device_map="auto",          # Automatic device placement
+                    dtype=torch.float16,        # Use FP16 for speed and memory efficiency (fixed deprecated torch_dtype)
+                    device_map="cuda:0",        # Force GPU placement to avoid meta device issues
                     trust_remote_code=True,
-                    max_memory={0: f"{self.max_memory_gb}GB"},  # Limit GPU memory usage
-                    use_cache=True  # Enable KV caching for faster generation
+                    low_cpu_mem_usage=True,     # Reduce CPU memory usage during loading
+                    use_cache=True              # Enable KV caching for faster generation
                 )
                 
-                # Set to evaluation mode and optimize for inference
+                # Ensure all model parameters are on GPU (fix meta device issue)
+                self.get_logger().info("   └── Moving model to GPU and setting eval mode...")
+                self.model = self.model.to(self.device)
                 self.model.eval()
+                
+                # Verify no parameters are on meta device
+                meta_params = sum(1 for p in self.model.parameters() if p.device.type == 'meta')
+                if meta_params > 0:
+                    self.get_logger().warn(f"   └── Warning: {meta_params} parameters still on meta device")
+                else:
+                    self.get_logger().info("   └── All parameters successfully loaded to GPU")
                 
                 # Compile model for faster inference (PyTorch 2.0+)
                 try:
@@ -327,13 +337,14 @@ class LocalVLMNavigationNode(Node):
                 # Get current multimodal data
                 current_image = self._get_current_camera_image()
                 sensor_data = self._get_current_sensor_data()
+                lidar_data = self._get_current_lidar_data()
                 
                 # Extract prompt from source_node field
                 source_parts = request.command.source_node.split('|', 1)
                 prompt = source_parts[1] if len(source_parts) > 1 else "Analyze the current scene for robot navigation"
                 
-                # Run VLM inference
-                navigation_result = self._run_vlm_navigation_inference(current_image, prompt, sensor_data)
+                # Run VLM inference with LiDAR data
+                navigation_result = self._run_vlm_navigation_inference(current_image, prompt, sensor_data, lidar_data)
                 
                 # Format response
                 analysis_result = {
@@ -409,7 +420,15 @@ class LocalVLMNavigationNode(Node):
                     'timestamp': self.get_clock().now().nanoseconds
                 }
     
-    def _run_vlm_navigation_inference(self, image: Optional[Image.Image], prompt: str, sensor_data: Dict[str, float]) -> Dict[str, Any]:
+    def _get_current_lidar_data(self) -> Optional[Dict[str, Any]]:
+        """Get current LiDAR data thread-safely"""
+        with self.lidar_lock:
+            if self.current_lidar_data is not None:
+                return self.current_lidar_data.copy()
+            else:
+                return None
+    
+    def _run_vlm_navigation_inference(self, image: Optional[Image.Image], prompt: str, sensor_data: Dict[str, float], lidar_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Run local VLM inference for navigation decisions"""
         start_time = time.time()
         inference_timeout = 2.0  # 2-second timeout for ultra-fast response
@@ -421,8 +440,29 @@ class LocalVLMNavigationNode(Node):
             
             self.get_logger().info(f"   └── Processing image: {image.size} pixels")
             
-            # Ultra-concise prompt for maximum speed
-            navigation_prompt = f"Navigate robot: F={sensor_data.get('distance_front', 0):.1f}m L={sensor_data.get('distance_left', 0):.1f}m R={sensor_data.get('distance_right', 0):.1f}m. Reply: ACTION:move_forward/turn_left/turn_right/stop"
+            # Build comprehensive sensor information including LiDAR
+            sensor_info = f"Front: {sensor_data.get('distance_front', 0):.1f}m, Left: {sensor_data.get('distance_left', 0):.1f}m, Right: {sensor_data.get('distance_right', 0):.1f}m"
+            
+            if lidar_data:
+                lidar_info = f", LiDAR: Front={lidar_data.get('front_distance', 0):.1f}m, Min={lidar_data.get('min_distance', 0):.1f}m"
+                sensor_info += lidar_info
+                self.get_logger().debug(f"   └── Using LiDAR data: {lidar_info}")
+            else:
+                self.get_logger().debug("   └── No LiDAR data available")
+            
+            # Improved prompt format based on Qwen2-VL best practices
+            navigation_prompt = f"""You are a robot navigation assistant. Analyze this camera image and sensor data to make a safe navigation decision.
+
+SENSOR DATA: {sensor_info}
+TASK: {prompt}
+
+Based on the image and sensor data, choose ONE action:
+- move_forward: Safe path ahead, no obstacles
+- turn_left: Need to turn left to avoid obstacles or follow path  
+- turn_right: Need to turn right to avoid obstacles or follow path
+- stop: Unsafe to proceed, obstacles too close
+
+Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [brief explanation]"""
             
             self.get_logger().info("   └── Running Qwen2-VL inference for navigation...")
             
@@ -503,6 +543,10 @@ class LocalVLMNavigationNode(Node):
                 clean_up_tokenization_spaces=False
             )[0]
             
+            # DEBUG: Log the actual VLM response
+            self.get_logger().info(f"   └── RAW VLM Response: '{response_text}'")
+            self.get_logger().info(f"   └── Response length: {len(response_text)} characters")
+            
             # Parse navigation decision from response
             navigation_result = self._parse_vlm_response(response_text, sensor_data)
             
@@ -526,12 +570,16 @@ class LocalVLMNavigationNode(Node):
     def _parse_vlm_response(self, response_text: str, sensor_data: Dict[str, float]) -> Dict[str, Any]:
         """Parse VLM response to extract navigation decision"""
         try:
+            # DEBUG: Log parsing details
+            self.get_logger().info(f"   └── PARSING: Input text: '{response_text}'")
             response_upper = response_text.upper()
+            self.get_logger().info(f"   └── PARSING: Uppercase: '{response_upper}'")
             
             # Extract action
             action = "stop"  # Default safe action
             if "ACTION:" in response_upper:
                 action_part = response_upper.split("ACTION:")[1].split("|")[0].strip()
+                self.get_logger().info(f"   └── PARSING: Found ACTION: '{action_part}'")
                 if "MOVE_FORWARD" in action_part:
                     action = "move_forward"
                 elif "TURN_LEFT" in action_part:
@@ -540,20 +588,41 @@ class LocalVLMNavigationNode(Node):
                     action = "turn_right"
                 elif "STOP" in action_part:
                     action = "stop"
+            else:
+                # Try simple keyword detection
+                self.get_logger().info("   └── PARSING: No ACTION: found, trying keyword detection")
+                if "MOVE_FORWARD" in response_upper or "FORWARD" in response_upper:
+                    action = "move_forward"
+                elif "TURN_LEFT" in response_upper or "LEFT" in response_upper:
+                    action = "turn_left"
+                elif "TURN_RIGHT" in response_upper or "RIGHT" in response_upper:
+                    action = "turn_right"
+                elif "STOP" in response_upper:
+                    action = "stop"
+            
+            self.get_logger().info(f"   └── PARSING: Final action: '{action}'")
             
             # Extract confidence
             confidence = 0.5  # Default confidence
             if "CONFIDENCE:" in response_upper:
                 try:
-                    conf_part = response_upper.split("CONFIDENCE:")[1].split("|")[0].strip()
-                    confidence = float(conf_part)
-                    confidence = max(0.0, min(1.0, confidence))  # Clamp to [0, 1]
-                except:
+                    conf_part = response_upper.split("CONFIDENCE:")[1].strip()
+                    # Extract just the number (handle spaces and other text)
+                    import re
+                    conf_match = re.search(r'(\d+\.?\d*)', conf_part)
+                    if conf_match:
+                        confidence = float(conf_match.group(1))
+                        confidence = max(0.0, min(1.0, confidence))  # Clamp to [0, 1]
+                        self.get_logger().debug(f"   └── PARSING: Extracted confidence: {confidence}")
+                except Exception as e:
+                    self.get_logger().debug(f"   └── PARSING: Confidence extraction failed: {e}")
                     confidence = 0.5
             
             # Extract reasoning
             reasoning = "VLM navigation decision"
-            if "REASON:" in response_upper:
+            if "REASONING:" in response_upper:
+                reasoning = response_text.split("REASONING:")[1].split("|")[0].strip()
+            elif "REASON:" in response_upper:
                 reasoning = response_text.split("REASON:")[1].split("|")[0].strip()
             
             # Safety check with sensors
