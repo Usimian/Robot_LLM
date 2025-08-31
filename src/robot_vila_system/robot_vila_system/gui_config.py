@@ -11,7 +11,7 @@ class GUIConfig:
     # Window settings
     WINDOW_TITLE = "Robot Nemotron Client"
     WINDOW_WIDTH = 1200
-    WINDOW_HEIGHT = 900
+    WINDOW_HEIGHT =1000
 
     # Colors
     COLORS = {
@@ -28,6 +28,9 @@ class GUIConfig:
     CAMERA_PANEL_WIDTH = 440
     CAMERA_PANEL_HEIGHT = 400
     STATUS_PANEL_HEIGHT = 120
+    
+    # LiDAR display settings
+    LIDAR_MAX_RANGE = 3.0  # Maximum LiDAR range in meters
 
     # Font settings
     FONT_FAMILY = "Arial"
@@ -41,7 +44,7 @@ class GUIConfig:
 
     # VILA settings
     DEFAULT_VILA_PROMPT = "Analyze the current camera view for navigation."
-    COSMOS_AUTO_INTERVAL = 1.0  # seconds
+    COSMOS_AUTO_INTERVAL = 2.0  # seconds
 
     # QoS settings
     IMAGE_QOS_DEPTH = 10

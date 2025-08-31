@@ -92,6 +92,15 @@ class RobotGUIROS2Node(Node):
             self.best_effort_qos
         )
         
+        # LiDAR scan data (separate subscription)
+        from sensor_msgs.msg import LaserScan
+        self.lidar_subscriber = self.create_subscription(
+            LaserScan,
+            '/scan',
+            self._lidar_scan_callback,
+            self.best_effort_qos
+        )
+        
         # Camera images
         self.image_subscriber = self.create_subscription(
             RosImage,
@@ -150,12 +159,20 @@ class RobotGUIROS2Node(Node):
             'battery_voltage': msg.battery_voltage,
             'cpu_temp': msg.cpu_temp,
             'cpu_usage': msg.cpu_usage,
-            'distance_front': msg.distance_front,
-            'distance_left': msg.distance_left,
-            'distance_right': msg.distance_right,
             'timestamp': msg.timestamp_ns
         }
         self.gui_callback('sensor_data', sensor_data)
+    
+    def _lidar_scan_callback(self, msg):
+        """Handle LiDAR scan messages"""
+        lidar_data = {
+            'ranges': list(msg.ranges),
+            'angle_min': msg.angle_min,
+            'angle_max': msg.angle_max,
+            'angle_increment': msg.angle_increment,
+            'timestamp': msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        }
+        self.gui_callback('lidar_data', lidar_data)
     
     def _imu_callback(self, msg: Imu):
         """Handle IMU data messages"""
@@ -608,6 +625,8 @@ class RobotGUIROS2:
                 self._handle_sensor_data(data)
             elif message_type == 'imu_data':
                 self._handle_imu_data(data)
+            elif message_type == 'lidar_data':
+                self._handle_lidar_data(data)
             elif message_type == 'camera_image':
                 self._handle_camera_image(data)
             elif message_type == 'navigation_commands':
@@ -640,6 +659,12 @@ class RobotGUIROS2:
         # Update movement panel with IMU data
         if hasattr(self, 'movement_panel'):
             self.movement_panel.update_imu_data(data)
+
+    def _handle_lidar_data(self, data):
+        """Handle LiDAR scan data updates"""
+        # Update movement panel with LiDAR data
+        if hasattr(self, 'movement_panel'):
+            self.movement_panel.update_lidar_data(data)
 
     def _handle_camera_image(self, data):
         """Handle camera image updates"""

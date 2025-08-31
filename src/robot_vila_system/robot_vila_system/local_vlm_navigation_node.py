@@ -29,6 +29,8 @@ from std_msgs.msg import String
 import torch
 from PIL import Image
 from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
+import transformers
+transformers.logging.set_verbosity_error()  # Suppress generation warnings
 import cv2
 
 class LocalVLMNavigationNode(Node):
@@ -44,7 +46,7 @@ class LocalVLMNavigationNode(Node):
         
         # Aggressive speed optimization settings
         self.max_image_size = 112  # Reduce to 112x112 for maximum speed (16x fewer pixels than 448x448)
-        self.max_new_tokens = 32   # Increase to 32 tokens for complete responses
+        self.max_new_tokens = 128  # Sufficient tokens for detailed reasoning
         self.use_cache = True      # Enable KV cache for faster inference
         self.skip_chat_template = True  # Skip expensive chat template processing
         
@@ -110,6 +112,8 @@ class LocalVLMNavigationNode(Node):
             '/vlm/status',
             self.reliable_qos
         )
+        
+        # No enhanced sensor publisher needed - GUI will subscribe to /scan directly
         
         # Subscribers
         self.sensor_subscriber = self.create_subscription(
@@ -214,7 +218,7 @@ class LocalVLMNavigationNode(Node):
                 self.model_loaded = True
                 self.get_logger().info("✅ Qwen2-VL-7B-Instruct loaded successfully for navigation")
                 self._publish_status("ready", "Local VLM navigation system ready", model_name=self.model_name)
-                
+                        
             except Exception as e:
                 error_msg = f"Model loading failed: {e}"
                 self.get_logger().error(f"❌ {error_msg}")
@@ -238,13 +242,11 @@ class LocalVLMNavigationNode(Node):
         status_msg.data = json.dumps(status_data)
         self.status_publisher.publish(status_msg)
     
+
     def _sensor_data_callback(self, msg: SensorData):
         """Handle incoming sensor data"""
         with self.sensor_data_lock:
             self.current_sensor_data = {
-                'distance_front': msg.distance_front,
-                'distance_left': msg.distance_left,
-                'distance_right': msg.distance_right,
                 'battery_voltage': msg.battery_voltage,
                 'cpu_temp': msg.cpu_temp,
                 'cpu_usage': msg.cpu_usage,
@@ -265,7 +267,13 @@ class LocalVLMNavigationNode(Node):
         """Handle incoming LiDAR scans"""
         try:
             with self.lidar_lock:
-                self.current_lidar_data = self._process_lidar_scan(msg)
+                # Store both processed data and raw ranges for VLM analysis
+                processed_data = self._process_lidar_scan(msg)
+                processed_data['ranges'] = list(msg.ranges)  # Add raw ranges for VLM
+                processed_data['angle_min'] = msg.angle_min
+                processed_data['angle_max'] = msg.angle_max
+                processed_data['angle_increment'] = msg.angle_increment
+                self.current_lidar_data = processed_data
         except Exception as e:
             self.get_logger().warn(f"LiDAR processing failed: {e}")
     
@@ -342,19 +350,19 @@ class LocalVLMNavigationNode(Node):
                 # Extract prompt from source_node field
                 source_parts = request.command.source_node.split('|', 1)
                 prompt = source_parts[1] if len(source_parts) > 1 else "Analyze the current scene for robot navigation"
-                
+            
                 # Run VLM inference with LiDAR data
                 navigation_result = self._run_vlm_navigation_inference(current_image, prompt, sensor_data, lidar_data)
-                
+            
                 # Format response
                 analysis_result = {
-                'success': True,
-                'analysis': f"Local VLM analysis: {navigation_result['reasoning']}",
-                'navigation_commands': {
-                    'action': navigation_result['action'],
+                    'success': True,
+                    'analysis': f"Local VLM analysis: {navigation_result['reasoning']}",
+                    'navigation_commands': {
+                        'action': navigation_result['action'],
+                        'confidence': navigation_result['confidence']
+                    },
                     'confidence': navigation_result['confidence']
-                },
-                'confidence': navigation_result['confidence']
                 }
 
                 # Pack response
@@ -366,7 +374,7 @@ class LocalVLMNavigationNode(Node):
                 
                 response.success = True
                 response.result_message = json.dumps(result_data)
-                
+            
                 # Publish analysis results
                 command_msg = RobotCommand()
                 command_msg.robot_id = request.command.robot_id
@@ -375,9 +383,9 @@ class LocalVLMNavigationNode(Node):
                 command_msg.timestamp_ns = self.get_clock().now().nanoseconds
 
                 self.analysis_publisher.publish(command_msg)
-                
+            
                 self.get_logger().info(f"✅ Analysis complete: {navigation_result['action']} (confidence: {navigation_result['confidence']:.2f})")
-                
+            
             except Exception as e:
                 self.get_logger().error(f"❌ Analysis service error: {e}")
                 response.success = False
@@ -387,9 +395,9 @@ class LocalVLMNavigationNode(Node):
                 with self.analysis_lock:
                     self.analysis_in_progress = False
                     self.get_logger().debug("🔓 Analysis lock released")
-        
+            
         except Exception as e:
-            self.get_logger().error(f"❌ Analysis service error: {e}")
+            self.get_logger().error(f"❌ Outer analysis service error: {e}")
             response.success = False
             response.result_message = str(e)
             # Release lock on error
@@ -411,9 +419,6 @@ class LocalVLMNavigationNode(Node):
             else:
                 # Return safe defaults
                 return {
-                    'distance_front': 999.0,
-                    'distance_left': 999.0,
-                    'distance_right': 999.0,
                     'battery_voltage': 12.0,
                     'cpu_temp': 50.0,
                     'cpu_usage': 10.0,
@@ -434,37 +439,145 @@ class LocalVLMNavigationNode(Node):
         inference_timeout = 2.0  # 2-second timeout for ultra-fast response
         try:
             if image is None:
-                # Use sensor-only navigation if no image
-                self.get_logger().warn("   └── No camera image available, using sensor-only navigation")
-                return self._sensor_only_navigation(sensor_data, "No camera image available")
+                # Cannot navigate without camera image
+                self.get_logger().error("   └── No camera image available - cannot perform navigation")
+                return {
+                    'action': 'stop',
+                    'confidence': 0.0,
+                    'reasoning': 'No camera image available - navigation requires both camera and LiDAR data'
+                }
             
-            self.get_logger().info(f"   └── Processing image: {image.size} pixels")
+            self.get_logger().debug(f"   └── Processing image: {image.size} pixels")
             
-            # Build comprehensive sensor information including LiDAR
-            sensor_info = f"Front: {sensor_data.get('distance_front', 0):.1f}m, Left: {sensor_data.get('distance_left', 0):.1f}m, Right: {sensor_data.get('distance_right', 0):.1f}m"
+            # Check for LiDAR data availability
+            if not lidar_data or 'ranges' not in lidar_data or not lidar_data['ranges']:
+                self.get_logger().error("   └── No LiDAR data available - cannot perform navigation")
+                return {
+                    'action': 'stop',
+                    'confidence': 0.0,
+                    'reasoning': 'No LiDAR data available - navigation requires both camera and LiDAR data'
+                }
             
-            if lidar_data:
-                lidar_info = f", LiDAR: Front={lidar_data.get('front_distance', 0):.1f}m, Min={lidar_data.get('min_distance', 0):.1f}m"
-                sensor_info += lidar_info
-                self.get_logger().debug(f"   └── Using LiDAR data: {lidar_info}")
-            else:
-                self.get_logger().debug("   └── No LiDAR data available")
+            # Build sensor information from LiDAR data
+            sensor_info = "Sensors: Using LiDAR_360° scan for all distance measurements"
             
-            # Improved prompt format based on Qwen2-VL best practices
-            navigation_prompt = f"""You are a robot navigation assistant. Analyze this camera image and sensor data to make a safe navigation decision.
+            # Process full 360° LiDAR scan (1° resolution, rear 90° obstructed)
+            ranges = lidar_data['ranges']
+            num_points = len(ranges)
+            
+            # DEBUG: Log LiDAR data details
+            self.get_logger().info(f"   └── DEBUG: LiDAR has {num_points} points")
+            self.get_logger().info(f"   └── DEBUG: Front distance (ranges[0]) = {ranges[0]:.3f}m")
+            if num_points > 100:
+                self.get_logger().info(f"   └── DEBUG: ranges[10] = {ranges[10]:.3f}m, ranges[50] = {ranges[50]:.3f}m")
+            
+            # Create 360° distance profile (every 10° for VLM readability)
+            lidar_profile = []
+            for i in range(0, 360, 10):  # Every 10 degrees
+                if i < num_points:
+                    angle_desc = f"{i}°"
+                    if 135 <= i <= 225:  # Rear 90° obstructed
+                        lidar_profile.append(f"{angle_desc}:obstructed")
+                    else:
+                        dist = ranges[i] if i < len(ranges) else 0.0
+                        lidar_profile.append(f"{angle_desc}:{dist:.1f}m")
+                        # DEBUG: Log first few values
+                        if i <= 20:
+                            self.get_logger().info(f"   └── DEBUG: ranges[{i}] = {dist:.3f}m")
+            
+            lidar_360 = ", ".join(lidar_profile)
+            
+            # Extract front distance explicitly for VLM clarity
+            front_distance = ranges[0] if len(ranges) > 0 else 0.0
+            sensor_info += f", FRONT_DISTANCE: {front_distance:.1f}m, LiDAR_360°: [{lidar_360}]"
+            
+            # DEBUG: Log what data we're sending to VLM
+            self.get_logger().info(f"   └── VLM INPUT DATA: Camera + 360° LiDAR scan")
+            self.get_logger().info(f"   └── DEBUG SENSOR_INFO: {sensor_info[:200]}...")  # First 200 chars
+            
+            # Navigation prompt with 360° LiDAR awareness
+            navigation_prompt = f"""You are a robot navigation assistant. Analyze this camera image and 360° LiDAR scan to make a safe navigation decision.
+
+⚠️ CRITICAL: The FRONT_DISTANCE in sensor data shows the exact distance directly ahead. Use ONLY this value for front distance decisions. DO NOT make up or hallucinate any other distance values.
 
 SENSOR DATA: {sensor_info}
 TASK: {prompt}
 
-Based on the image and sensor data, choose ONE action:
-- move_forward: Safe path ahead, no obstacles
-- turn_left: Need to turn left to avoid obstacles or follow path  
-- turn_right: Need to turn right to avoid obstacles or follow path
-- stop: Unsafe to proceed, obstacles too close
+LIDAR EXPLANATION:
+- 0° = directly ahead, 90° = left side, 180° = behind, 270° = right side
+- 135°-225° = rear blind spot (obstructed)
+- Values show distance to nearest obstacle in each direction
 
-Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [brief explanation]"""
+CRITICAL MATH CHECK - MEMORIZE THESE FACTS:
+- ANY number less than 1.0 means STOP: 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9
+- ANY number greater than 1.0 means SAFE: 1.1, 1.2, 1.3, 1.4, 1.5, 2.0, 3.0, 5.0
+
+EXPLICIT MATH TRAINING - THESE ARE FACTS:
+- 0.4 < 1.0 = TRUE (0.4 is LESS than 1.0) → STOP
+- 0.8 < 1.0 = TRUE (0.8 is LESS than 1.0) → STOP  
+- 1.2 > 1.0 = TRUE (1.2 is GREATER than 1.0) → SAFE
+- 2.5 > 2.0 = TRUE (2.5 is GREATER than 2.0) → MOVE FORWARD
+
+WRONG EXAMPLES TO AVOID:
+- NEVER say "0.4m > 1.0m" - this is mathematically FALSE
+- NEVER say "0.8m > 1.0m" - this is mathematically FALSE
+- If you see 0.4m, you MUST say "0.4 < 1.0" and choose STOP
+
+DECISION LOGIC (FOLLOW EXACTLY):
+1. ALWAYS use the FRONT_DISTANCE value from sensor data - THIS IS THE DISTANCE DIRECTLY AHEAD
+2. If FRONT_DISTANCE < 1.0m → MUST stop (obstacle too close)
+3. If FRONT_DISTANCE > 2.0m → MUST move forward (LiDAR is accurate, camera may show distant objects)
+4. If FRONT_DISTANCE 1.0m-2.0m → Use camera to decide if path is navigable
+5. NEVER make up or hallucinate distance values - ONLY use the provided FRONT_DISTANCE
+
+CRITICAL: LiDAR measures ACTUAL distance to obstacles. Camera shows visual appearance but may make distant objects look closer than they are.
+
+NAVIGATION PHILOSOPHY:
+- LiDAR distance > 2.0m = ALWAYS SAFE to move forward (trust the distance sensor)
+- Camera is for context only when LiDAR shows 1.0m-2.0m range
+- Furniture/objects >2.0m away = SAFE to approach (can navigate around them)
+- The goal is navigation, not stopping for distant furniture
+- Turns are for exploration and finding clearer paths, not just obstacle avoidance
+
+MECANUM MOVEMENT SCENARIOS:
+- Front 1.5m, Left 3.0m → move_forward OR strafe_left OR turn_left (multiple options)
+- Front 0.8m, Right 2.5m → strafe_right (slide sideways to avoid obstacle)
+- Front 0.6m, Left 2.0m → strafe_left (front blocked, strafe to clear space)
+- Front 3.0m → move_forward (clear path ahead)
+- Tight hallway with sides at 1.0m → move_forward (can fit)
+- All directions < 1.0m → stop (completely surrounded)
+
+MECANUM WHEEL CAPABILITIES:
+This robot has mecanum wheels and can:
+- Move forward/backward
+- Strafe left/right (sideways movement)
+- Rotate in place around its center
+- Combine movements (diagonal, etc.)
+
+Choose ONE action:
+- stop: ONLY if all directions < 1.0m (completely surrounded)
+- move_forward: If front (0°) distance > 1.0m
+- turn_left: Rotate in place to face left direction (useful for exploration)
+- turn_right: Rotate in place to face right direction (useful for exploration)  
+- strafe_left: Slide sideways to the left if left (90°) > 1.5m (great for tight spaces)
+- strafe_right: Slide sideways to the right if right (270°) > 1.5m (great for tight spaces)
+
+CRITICAL: Your ACTION must match your REASONING. If you say "robot must stop", then ACTION must be "stop".
+
+RESPONSE FORMAT (follow exactly):
+1. First, state the front distance: "Front distance is X.Xm"
+2. Then, do the math: "Since X.X < 1.0m" OR "X.X > 1.0m" OR "X.X > 2.0m"  
+3. Then, state what this means: "the robot must [stop/move_forward/turn_left/etc.]"
+4. Finally, choose ACTION that matches step 3
+
+EXAMPLES:
+- "Front distance is 0.4m. Since 0.4 < 1.0m, the robot must stop." → ACTION: stop
+- "Front distance is 2.5m. Since 2.5 > 2.0m, the robot must move forward." → ACTION: move_forward
+- "Front distance is 1.5m. Since 1.5 > 1.0m but camera shows obstacle, the robot must stop." → ACTION: stop
+
+Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the 4-step format above exactly]"""
             
-            self.get_logger().info("   └── Running Qwen2-VL inference for navigation...")
+            self.get_logger().debug("   └── Running Qwen2-VL inference for navigation...")
             
             # Use proper chat template for compatibility
             messages = [
@@ -478,7 +591,7 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [brief explanati
             ]
             
             # Apply chat template
-            self.get_logger().info("   └── Applying chat template...")
+            self.get_logger().debug("   └── Applying chat template...")
             text = self.processor.apply_chat_template(
                 messages, 
                 tokenize=False, 
@@ -486,7 +599,7 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [brief explanati
             )
             
             # Process inputs with speed optimization
-            self.get_logger().info("   └── Processing inputs with Qwen2-VL processor...")
+            self.get_logger().debug("   └── Processing inputs with Qwen2-VL processor...")
             
             # Resize image for faster processing
             if image.size[0] > self.max_image_size or image.size[1] > self.max_image_size:
@@ -499,7 +612,7 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [brief explanati
                 return_tensors="pt"
             )
             
-            self.get_logger().info(f"   └── Input keys: {list(inputs.keys())}")
+            self.get_logger().debug(f"   └── Input keys: {list(inputs.keys())}")
             
             # Move to device
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
@@ -510,18 +623,21 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [brief explanati
                 # Check if we're already approaching timeout
                 if time.time() - start_time > inference_timeout * 0.8:
                     self.get_logger().warn(f"   └── Pre-generation timeout, using sensor fallback")
-                    return self._sensor_only_navigation(sensor_data, "Pre-generation timeout")
+                    self.get_logger().error("   └── VLM inference timeout - cannot navigate safely")
+                    return {
+                        'action': 'stop',
+                        'confidence': 0.0,
+                        'reasoning': 'VLM inference timeout - navigation requires successful analysis'
+                    }
                 
-                # Use torch.compile and optimized settings
+                # Use torch.compile and optimized settings (only supported parameters)
                 generated_ids = self.model.generate(
                     **inputs,
                     max_new_tokens=self.max_new_tokens,  # Ultra-reduced tokens
                     do_sample=False,  # Deterministic for navigation safety
-                    temperature=0.0,  # Set to 0 for fastest greedy decoding
                     pad_token_id=self.tokenizer.eos_token_id,
                     use_cache=self.use_cache,  # Enable KV caching
                     num_beams=1,  # Greedy search
-                    early_stopping=True,  # Stop early
                     repetition_penalty=1.0,  # No repetition penalty for speed
                     length_penalty=1.0,      # No length penalty for speed
                     no_repeat_ngram_size=0,  # Disable n-gram checking for speed
@@ -530,7 +646,7 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [brief explanati
                 )
                 
                 generation_time = time.time() - generation_start
-                self.get_logger().info(f"   └── Generation completed in {generation_time:.3f}s")
+                self.get_logger().debug(f"   └── Generation completed in {generation_time:.3f}s")
             
             # Decode response
             generated_ids_trimmed = [
@@ -545,47 +661,83 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [brief explanati
             
             # DEBUG: Log the actual VLM response
             self.get_logger().info(f"   └── RAW VLM Response: '{response_text}'")
-            self.get_logger().info(f"   └── Response length: {len(response_text)} characters")
+            self.get_logger().debug(f"   └── Response length: {len(response_text)} characters")
             
             # Parse navigation decision from response
             navigation_result = self._parse_vlm_response(response_text, sensor_data)
             
+            # Safety check - ensure we got a valid result
+            if navigation_result is None:
+                self.get_logger().debug("   └── VLM parsing failed, using sensor-only navigation")
+                self.get_logger().error("   └── VLM parsing failed - cannot navigate safely")
+                navigation_result = {
+                    'action': 'stop',
+                    'confidence': 0.0,
+                    'reasoning': 'VLM parsing failed - navigation requires successful analysis'
+                }
+            
+            # Mathematical validation - catch VLM math errors using LiDAR data (same as VLM sees)
+            lidar_front_distance = 999.0
+            if lidar_data and 'ranges' in lidar_data and len(lidar_data['ranges']) > 0:
+                ranges = lidar_data['ranges']
+                # Front is at index 0 in LiDAR scan
+                lidar_front_distance = ranges[0] if len(ranges) > 0 else 999.0
+            
+            if navigation_result['action'] == 'move_forward' and lidar_front_distance < 1.0:
+                self.get_logger().error(f"   └── VLM MATH ERROR DETECTED: Wants to move forward with LiDAR front distance {lidar_front_distance:.1f}m < 1.0m")
+                self.get_logger().error(f"   └── OVERRIDING VLM decision for safety")
+                self.get_logger().error(f"   └── Overriding dangerous VLM decision with STOP")
+                navigation_result = {
+                    'action': 'stop',
+                    'confidence': 0.9,
+                    'reasoning': f'Safety override: VLM wanted to move forward but obstacle at {lidar_front_distance:.1f}m < 1.0m'
+                }
+            
             # Log timing performance
             total_time = time.time() - start_time
-            self.get_logger().info(f"   └── VLM decision: {navigation_result['action']} (confidence: {navigation_result['confidence']:.2f}) in {total_time:.3f}s")
+            self.get_logger().debug(f"   └── VLM decision: {navigation_result['action']} (confidence: {navigation_result['confidence']:.2f}) in {total_time:.3f}s")
             
             # Add timing to result
             navigation_result['inference_time'] = total_time
             
             return navigation_result
-            
+                
         except Exception as e:
             import traceback
             error_msg = f"VLM inference failed: {e}"
             full_traceback = traceback.format_exc()
             self.get_logger().error(f"   └── {error_msg}")
             self.get_logger().error(f"   └── Full traceback: {full_traceback}")
-            return self._sensor_only_navigation(sensor_data, f"{error_msg}. Using sensor-only navigation.")
+            self.get_logger().error(f"   └── VLM inference failed - cannot navigate safely")
+            return {
+                'action': 'stop',
+                'confidence': 0.0,
+                'reasoning': f'VLM inference failed: {error_msg} - navigation requires successful analysis'
+            }
     
     def _parse_vlm_response(self, response_text: str, sensor_data: Dict[str, float]) -> Dict[str, Any]:
         """Parse VLM response to extract navigation decision"""
         try:
             # DEBUG: Log parsing details
-            self.get_logger().info(f"   └── PARSING: Input text: '{response_text}'")
+            self.get_logger().debug(f"   └── PARSING: Input text: '{response_text}'")
             response_upper = response_text.upper()
-            self.get_logger().info(f"   └── PARSING: Uppercase: '{response_upper}'")
+            self.get_logger().debug(f"   └── PARSING: Uppercase: '{response_upper}'")
             
             # Extract action
             action = "stop"  # Default safe action
             if "ACTION:" in response_upper:
                 action_part = response_upper.split("ACTION:")[1].split("|")[0].strip()
-                self.get_logger().info(f"   └── PARSING: Found ACTION: '{action_part}'")
+                self.get_logger().debug(f"   └── PARSING: Found ACTION: '{action_part}'")
                 if "MOVE_FORWARD" in action_part:
                     action = "move_forward"
                 elif "TURN_LEFT" in action_part:
                     action = "turn_left"
                 elif "TURN_RIGHT" in action_part:
                     action = "turn_right"
+                elif "STRAFE_LEFT" in action_part:
+                    action = "strafe_left"
+                elif "STRAFE_RIGHT" in action_part:
+                    action = "strafe_right"
                 elif "STOP" in action_part:
                     action = "stop"
             else:
@@ -593,6 +745,10 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [brief explanati
                 self.get_logger().info("   └── PARSING: No ACTION: found, trying keyword detection")
                 if "MOVE_FORWARD" in response_upper or "FORWARD" in response_upper:
                     action = "move_forward"
+                elif "STRAFE_LEFT" in response_upper:
+                    action = "strafe_left"
+                elif "STRAFE_RIGHT" in response_upper:
+                    action = "strafe_right"
                 elif "TURN_LEFT" in response_upper or "LEFT" in response_upper:
                     action = "turn_left"
                 elif "TURN_RIGHT" in response_upper or "RIGHT" in response_upper:
@@ -600,7 +756,7 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [brief explanati
                 elif "STOP" in response_upper:
                     action = "stop"
             
-            self.get_logger().info(f"   └── PARSING: Final action: '{action}'")
+            self.get_logger().debug(f"   └── PARSING: Final action: '{action}'")
             
             # Extract confidence
             confidence = 0.5  # Default confidence
@@ -625,61 +781,34 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [brief explanati
             elif "REASON:" in response_upper:
                 reasoning = response_text.split("REASON:")[1].split("|")[0].strip()
             
-            # Safety check with sensors
-            front_dist = sensor_data.get('distance_front', 999.0)
-            if front_dist < 0.5 and action == "move_forward":
-                action = "stop"
-                reasoning += " (Override: obstacle detected by sensors)"
-                confidence = 0.95
-                
+            # Check for reasoning-action consistency
+            reasoning_lower = reasoning.lower()
+            if action == 'move_forward' and ('must stop' in reasoning_lower or 'should stop' in reasoning_lower):
+                self.get_logger().error(f"   └── REASONING-ACTION MISMATCH: Says 'must stop' but ACTION is 'move_forward'")
+                self.get_logger().error(f"   └── Correcting action to match reasoning")
+                action = 'stop'
+                confidence = max(0.8, confidence)  # High confidence in safety correction
+            elif action == 'stop' and ('must move' in reasoning_lower or 'should move' in reasoning_lower):
+                self.get_logger().warn(f"   └── REASONING-ACTION MISMATCH: Says 'must move' but ACTION is 'stop'")
+                # Keep stop for safety - don't override stop with movement
+            
             return {
                 'action': action,
                 'confidence': confidence,
                 'reasoning': reasoning,
                 'vlm_response': response_text
             }
-                
+            
         except Exception as e:
-            self.get_logger().warn(f"Failed to parse VLM response: {e}")
-            return self._sensor_only_navigation(sensor_data, f"VLM response parsing failed: {e}")
+            self.get_logger().warn(f"Failed to parse VLM response (response_length={len(response_text)}): {e}")
+            self.get_logger().warn(f"Response was: '{response_text[:200]}{'...' if len(response_text) > 200 else ''}'")
+            self.get_logger().error(f"   └── VLM response parsing failed - cannot navigate safely")
+            return {
+                'action': 'stop',
+                'confidence': 0.0,
+                'reasoning': f'VLM response parsing failed: {e} - navigation requires successful analysis'
+            }
     
-    def _sensor_only_navigation(self, sensor_data: Dict[str, float], reason: str) -> Dict[str, Any]:
-        """Fallback sensor-only navigation when VLM fails"""
-        front_dist = sensor_data.get('distance_front', 999.0)
-        left_dist = sensor_data.get('distance_left', 999.0)
-        right_dist = sensor_data.get('distance_right', 999.0)
-        
-        if front_dist < 0.8:  # Obstacle ahead
-            if left_dist > right_dist and left_dist > 1.0:
-                return {
-                    'action': 'turn_left',
-                    'confidence': 0.85,
-                    'reasoning': f'Sensor-only navigation: obstacle ahead, turning left. {reason}'
-                }
-            elif right_dist > 1.0:
-                return {
-                    'action': 'turn_right',
-                    'confidence': 0.85,
-                    'reasoning': f'Sensor-only navigation: obstacle ahead, turning right. {reason}'
-                }
-            else:
-                return {
-                    'action': 'stop',
-                    'confidence': 0.95,
-                    'reasoning': f'Sensor-only navigation: obstacles detected, stopping. {reason}'
-                }
-        elif front_dist > 2.0:  # Clear path
-            return {
-                'action': 'move_forward',
-                'confidence': 0.80,
-                'reasoning': f'Sensor-only navigation: clear path ahead. {reason}'
-            }
-        else:  # Moderate distance
-            return {
-                'action': 'move_forward',
-                'confidence': 0.70,
-                'reasoning': f'Sensor-only navigation: proceeding cautiously. {reason}'
-            }
 
 def main(args=None):
     """Main function"""
@@ -695,8 +824,8 @@ def main(args=None):
             node.get_logger().error(f"Node error: {e}")
     finally:
         if 'node' in locals():
-            node.destroy_node()
-        rclpy.shutdown()
+                node.destroy_node()
+                rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

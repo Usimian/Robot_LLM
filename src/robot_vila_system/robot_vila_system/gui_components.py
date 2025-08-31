@@ -9,6 +9,7 @@ from tkinter import ttk, scrolledtext, filedialog
 from typing import Dict, Any, Callable
 from PIL import Image, ImageTk
 import logging
+import math
 
 from .gui_config import GUIConfig
 from .gui_utils import GUIUtils
@@ -129,7 +130,7 @@ class SystemStatusPanel:
                 model_name = status_data.get('model_name', 'Qwen2-VL-7B-Instruct')
                 # Shorten the name for display
                 if 'Qwen2-VL-7B-Instruct' in model_name:
-                    status_text = "Qwen2-VL-7B"
+                    status_text = "Qwen2-VL-7B-Instruct"
                 else:
                     status_text = model_name.split('/')[-1]  # Get last part after slash
                 color = GUIConfig.COLORS['success']
@@ -265,16 +266,42 @@ class MovementControlPanel:
         # LiDAR header
         ttk.Label(imu_frame, text="LiDAR:", font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(10, 0))
         
-        # LiDAR values (Front, Left, Right)
-        self.lidar_labels = {}
-        for direction in ['F', 'L', 'R']:  # Front, Left, Right
-            lidar_row = ttk.Frame(imu_frame)
-            lidar_row.pack(fill=tk.X, padx=(20, 0))
-            ttk.Label(lidar_row, text=f"{direction}:", font=('TkDefaultFont', 10, 'bold'), width=2).pack(side=tk.LEFT)
-            self.lidar_labels[direction] = ttk.Label(lidar_row, text="--.- m", foreground=GUIConfig.COLORS['warning'], font=('TkDefaultFont', 10, 'bold'))
-            self.lidar_labels[direction].pack(side=tk.LEFT, padx=(5, 0))
+        # LiDAR 270° arc visualization (increased height for better fit)
+        self.lidar_canvas = tk.Canvas(imu_frame, width=180, height=120, bg='black', highlightthickness=1, highlightbackground='gray')
+        self.lidar_canvas.pack(pady=(5, 0))
+        
+        # Initialize LiDAR data storage
+        self.max_range = GUIConfig.LIDAR_MAX_RANGE
+        self.lidar_ranges = [self.max_range] * 360  # Default to max range
+        self.raw_lidar_ranges = None  # Will store actual scan data
+        
+        # Draw initial arc
+        self._draw_lidar_arc()
+        
+        # Set up periodic LiDAR display update (every 0.5 seconds)
+        self._schedule_lidar_update()
 
-        # Movement Enable Toggle Button (below LiDAR)
+        # LiDAR range selection dropdown
+        range_frame = ttk.Frame(imu_frame)
+        range_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        ttk.Label(range_frame, text="Range:", font=('TkDefaultFont', 9)).pack(side=tk.LEFT)
+        
+        self.range_var = tk.StringVar(value="3.0")
+        self.range_dropdown = ttk.Combobox(
+            range_frame,
+            textvariable=self.range_var,
+            values=["0.5", "1.0", "2.0", "3.0", "4.0", "5.0"],
+            state="readonly",
+            width=6,
+            font=('TkDefaultFont', 9)
+        )
+        self.range_dropdown.pack(side=tk.RIGHT, padx=(5, 0))
+        self.range_dropdown.bind('<<ComboboxSelected>>', self._on_range_changed)
+        
+        ttk.Label(range_frame, text="m", font=('TkDefaultFont', 9)).pack(side=tk.RIGHT)
+
+        # Movement Enable Toggle Button (moved lower to accommodate LiDAR display)
         self.movement_enabled = True
         self.movement_toggle = ttk.Button(
             imu_frame,
@@ -282,7 +309,7 @@ class MovementControlPanel:
             command=self._toggle_movement,
             style='Toggle.TButton'
         )
-        self.movement_toggle.pack(fill=tk.X, pady=(15, 0))
+        self.movement_toggle.pack(fill=tk.X, pady=(10, 0))
 
         # Configure toggle button style
         style = ttk.Style()
@@ -305,6 +332,25 @@ class MovementControlPanel:
         # Notify parent of movement status change
         if self.command_callback:
             self.command_callback(('movement_toggle', self.movement_enabled))
+    
+    def _on_range_changed(self, event=None):
+        """Handle LiDAR range selection change"""
+        try:
+            new_range = float(self.range_var.get())
+            self.max_range = new_range
+            # Redraw the LiDAR display with new range immediately
+            self._draw_lidar_arc()
+        except ValueError:
+            # Invalid range value, revert to previous
+            self.range_var.set(str(self.max_range))
+    
+    def _schedule_lidar_update(self):
+        """Schedule periodic LiDAR display updates every 0.5 seconds"""
+        # Update the display
+        self._draw_lidar_arc()
+        # Schedule next update in 500ms
+        if hasattr(self, 'lidar_canvas') and self.lidar_canvas.winfo_exists():
+            self.lidar_canvas.after(500, self._schedule_lidar_update)
 
     def _on_safety_toggle(self):
         """Handle safety checkbox toggle"""
@@ -360,28 +406,119 @@ class MovementControlPanel:
                 if axis in self.imu_labels:
                     self.imu_labels[axis].config(text="Error", foreground=GUIConfig.COLORS['error'])
 
-    def update_lidar_data(self, sensor_data: Dict[str, Any]):
-        """Update LiDAR display with sensor data"""
+    def update_lidar_data(self, lidar_data: Dict[str, Any]):
+        """Update LiDAR arc visualization with LiDAR scan data"""
         try:
-            # Update LiDAR distance data (front, left, right)
-            if 'distance_front' in sensor_data:
-                distance = sensor_data['distance_front']
-                color = GUIConfig.COLORS['error'] if distance < 0.5 else GUIConfig.COLORS['success']
-                self.lidar_labels['F'].config(text=f"{distance:.2f} m", foreground=color)
-            if 'distance_left' in sensor_data:
-                distance = sensor_data['distance_left']
-                color = GUIConfig.COLORS['error'] if distance < 0.5 else GUIConfig.COLORS['success']
-                self.lidar_labels['L'].config(text=f"{distance:.2f} m", foreground=color)
-            if 'distance_right' in sensor_data:
-                distance = sensor_data['distance_right']
-                color = GUIConfig.COLORS['error'] if distance < 0.5 else GUIConfig.COLORS['success']
-                self.lidar_labels['R'].config(text=f"{distance:.2f} m", foreground=color)
+            # Use LiDAR scan data from /scan topic
+            if 'ranges' in lidar_data and lidar_data['ranges']:
+                # Store the raw scan data - we'll interpret it correctly in _draw_lidar_arc
+                self.raw_lidar_ranges = lidar_data['ranges']
+                # Debug: Log some sample data points with correct indexing
+                if len(self.raw_lidar_ranges) >= 100:
+                    mid_idx = len(self.raw_lidar_ranges) // 2
+                    quarter_idx = len(self.raw_lidar_ranges) // 4
+                    three_quarter_idx = 3 * len(self.raw_lidar_ranges) // 4
+                    logger.debug(f"LiDAR scan received: {len(self.raw_lidar_ranges)} points, "
+                               f"Back(idx=0)={self.raw_lidar_ranges[0]:.2f}m, "
+                               f"Front(idx={mid_idx})={self.raw_lidar_ranges[mid_idx]:.2f}m, "
+                               f"Left(idx={quarter_idx})={self.raw_lidar_ranges[quarter_idx]:.2f}m, "
+                               f"Right(idx={three_quarter_idx})={self.raw_lidar_ranges[three_quarter_idx]:.2f}m")
+                # Data stored, display will be updated by timer
+                pass
+            else:
+                # No LiDAR data available
+                logger.debug("No LiDAR ranges data available")
+                self.raw_lidar_ranges = None
         except Exception as e:
             logger.error(f"Error updating LiDAR data: {e}")
-            # Set error states for LiDAR labels
-            for direction in ['F', 'L', 'R']:
-                if direction in self.lidar_labels:
-                    self.lidar_labels[direction].config(text="Error", foreground=GUIConfig.COLORS['error'])
+            self.raw_lidar_ranges = None
+    
+    def _draw_lidar_arc(self, error=False):
+        """Draw the 270° LiDAR arc visualization"""
+        try:
+            # Clear canvas
+            self.lidar_canvas.delete("all")
+            
+            # Canvas dimensions - top of display is front of robot
+            width = 180
+            height = 180
+            center_x = width // 2
+            center_y = height // 2  # Center of canvas
+            
+            if error:
+                # Draw error state
+                self.lidar_canvas.create_text(center_x, height//2, text="LiDAR Error", fill="red", font=('Arial', 10))
+                return
+            
+            # No range rings - clean display
+            
+            # Draw LiDAR data points using actual scan data
+            if hasattr(self, 'raw_lidar_ranges') and self.raw_lidar_ranges:
+                # Process real LiDAR scan data
+                # Scan goes from angle_min (-π) to angle_max (+π)
+                # Index 0 = -π (back), middle index = 0 (front), last index = +π (back)
+                num_points = len(self.raw_lidar_ranges)
+                
+                for i, distance in enumerate(self.raw_lidar_ranges):
+                    # Convert scan index to angle in radians
+                    # angle_min = -π, angle_max = +π, so:
+                    scan_angle_rad = -math.pi + (i / (num_points - 1)) * (2 * math.pi)
+                    
+                    # Convert to degrees for easier understanding
+                    scan_angle_deg = math.degrees(scan_angle_rad)
+                    
+                    # Skip rear 90° blind spot - should appear at bottom of display
+                    # Currently excluding front 90° (top), need to exclude back 90° (bottom)
+                    # With current coordinate system, exclude angles around 0° for bottom exclusion
+                    if -45 <= scan_angle_deg <= 45:
+                        continue
+                    
+                    # Handle invalid/infinite distances
+                    if not math.isfinite(distance) or distance <= 0:
+                        continue  # Skip invalid points
+                    
+                    # Skip points beyond max range (don't show them at all)
+                    if distance > self.max_range:
+                        continue
+                    
+                    # Calculate point position using polar coordinates
+                    # LIDAR_MAX_RANGE corresponds to left/right edges (90° from center)
+                    # So max display radius is 80 pixels (half the 180px canvas width)
+                    pixel_radius = (distance / self.max_range) * 80
+                    
+                    # Convert scan angle to screen coordinates  
+                    # LiDAR scan: angle 0 = front, π/2 = left, π/-π = back, -π/2 = right
+                    # Screen display: we want front at TOP of screen
+                    # Rotate by -π/2 to put front (0) at top of screen
+                    screen_angle_rad = scan_angle_rad - math.pi/2
+                    
+                    # Calculate screen position (Y flipped for screen coordinates)
+                    point_x = center_x + pixel_radius * math.cos(screen_angle_rad)
+                    point_y = center_y - pixel_radius * math.sin(screen_angle_rad)  # Negative Y for screen
+                    
+                    # Draw single pixel red dots
+                    color = "red"
+                    self.lidar_canvas.create_rectangle(point_x, point_y, point_x+1, point_y+1, 
+                                                     fill=color, outline=color, width=0)
+            # No test data - only show real LiDAR data when available
+            
+            # Draw robot position (center dot) - clean and visible
+            self.lidar_canvas.create_oval(center_x-4, center_y-4, center_x+4, center_y+4, 
+                                        fill="cyan", outline="blue", width=2)
+            
+            # Draw front direction indicator - arrow pointing up (front)
+            front_x = center_x
+            front_y = center_y - 20
+            # Draw arrow shape pointing to top of display (front)
+            self.lidar_canvas.create_line(center_x, center_y, front_x, front_y, fill="cyan", width=3)
+            # Arrow head
+            self.lidar_canvas.create_line(front_x-4, front_y+6, front_x, front_y, fill="cyan", width=2)
+            self.lidar_canvas.create_line(front_x+4, front_y+6, front_x, front_y, fill="cyan", width=2)
+            
+        except Exception as e:
+            logger.error(f"Error drawing LiDAR arc: {e}")
+            # Draw simple error message
+            self.lidar_canvas.create_text(90, 50, text="Display Error", fill="red")
 
 
 class CameraPanel:
@@ -390,9 +527,14 @@ class CameraPanel:
     def __init__(self, parent, image_callback: Callable):
         self.parent = parent
         self.image_callback = image_callback
-        self.camera_label = None
+        self.camera_canvas = None
         self.source_var = None
         self.load_button = None
+        
+        # Rate limiting for camera updates
+        import time
+        self._last_update_time = 0
+        self._min_update_interval = 0.033  # ~30 FPS max to reduce flickering
 
     def create(self, parent):
         """Create the camera panel"""
@@ -402,19 +544,51 @@ class CameraPanel:
         camera_frame.pack_propagate(False)
         camera_frame.configure(width=GUIConfig.CAMERA_PANEL_WIDTH, height=GUIConfig.CAMERA_PANEL_HEIGHT)
 
-        # Camera display area with no border
-        self.camera_label = ttk.Label(
-            camera_frame, 
-            text="📹 No camera feed",
-            anchor='center',
-            justify='center'
+        # Camera display area with canvas for overlay support
+        self.camera_canvas = tk.Canvas(
+            camera_frame,
+            bg='black',
+            highlightthickness=0,
+            width=GUIConfig.CAMERA_PANEL_WIDTH - 20,
+            height=GUIConfig.CAMERA_PANEL_HEIGHT - 100
         )
-        self.camera_label.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        self.camera_canvas.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # Initial text when no image (will be positioned after canvas is mapped)
+        self._show_no_feed_message()
 
         # Camera controls
         self._create_camera_controls(camera_frame)
 
         return camera_frame
+    
+    def _show_no_feed_message(self):
+        """Show 'no camera feed' message on canvas"""
+        self._show_canvas_message("📹 No camera feed")
+    
+    def _show_canvas_message(self, message, color='white'):
+        """Show a message on the camera canvas"""
+        if self.camera_canvas:
+            # Clear only message elements, not camera image
+            self.camera_canvas.delete("message")
+            # Reset camera image tracking since we're showing a message
+            if hasattr(self, '_camera_image_id'):
+                delattr(self, '_camera_image_id')
+            if hasattr(self, '_overlay_line_id'):
+                delattr(self, '_overlay_line_id')
+            self.camera_canvas.delete("camera_image", "overlay_line")
+            
+            # Get canvas dimensions without forcing update
+            width = self.camera_canvas.winfo_width() or 400
+            height = self.camera_canvas.winfo_height() or 300
+            self.camera_canvas.create_text(
+                width//2, 
+                height//2,
+                text=message,
+                tags="message",
+                fill=color,
+                font=('TkDefaultFont', 12)
+            )
 
     def _create_camera_controls(self, parent):
         """Create camera control buttons"""
@@ -459,9 +633,9 @@ class CameraPanel:
         
         # Provide immediate visual feedback
         if source == "robot":
-            self.camera_label.config(text="📷 Waiting for robot camera feed...", image="")
+            self._show_canvas_message("📷 Waiting for robot camera feed...")
         elif source == "loaded":
-            self.camera_label.config(text="📷 Select 'Load Image' to choose an image", image="")
+            self._show_canvas_message("📷 Select 'Load Image' to choose an image")
 
     def _load_image_file(self):
         """Load image file from disk"""
@@ -475,14 +649,21 @@ class CameraPanel:
 
         if file_path:
             # Show loading message immediately
-            self.camera_label.config(text="📁 Loading image...", image="")
+            self._show_canvas_message("📁 Loading image...")
             
             if self.image_callback:
                 self.image_callback('image_loaded', file_path)
 
     def update_camera_image(self, pil_image):
-        """Update camera display with new image"""
-        if pil_image and self.camera_label:
+        """Update camera display with new image and red line overlay"""
+        if pil_image and self.camera_canvas:
+            # Rate limiting to reduce flickering
+            import time
+            current_time = time.time()
+            if current_time - self._last_update_time < self._min_update_interval:
+                return  # Skip this update
+            self._last_update_time = current_time
+            
             try:
                 # Calculate available space for image display
                 available_width = GUIConfig.CAMERA_PANEL_WIDTH - 20
@@ -502,18 +683,53 @@ class CameraPanel:
                     new_width = max(1, int(img_width * scale))
                     new_height = max(1, int(img_height * scale))
                     display_image = display_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                else:
+                    new_width, new_height = img_width, img_height
 
                 # Convert to PhotoImage
                 photo = ImageTk.PhotoImage(display_image)
-                self.camera_label.config(image=photo, text="")
-                self.camera_label.image = photo  # Keep reference
+                
+                # Center the image on canvas
+                canvas_width = self.camera_canvas.winfo_width() or available_width
+                canvas_height = self.camera_canvas.winfo_height() or available_height
+                x_offset = (canvas_width - new_width) // 2
+                y_offset = (canvas_height - new_height) // 2
+                
+                # Use configure instead of delete/create to reduce flickering
+                if not hasattr(self, '_camera_image_id'):
+                    # First time - create the image
+                    self._camera_image_id = self.camera_canvas.create_image(
+                        x_offset, y_offset, anchor=tk.NW, image=photo, tags="camera_image"
+                    )
+                    # Create red line overlay at midpoint (50%) of image
+                    line_y = y_offset + (new_height * 0.5)
+                    line_x1 = x_offset
+                    line_x2 = x_offset + new_width
+                    
+                    self._overlay_line_id = self.camera_canvas.create_line(
+                        line_x1, line_y, line_x2, line_y,
+                        fill='#800000',  # Dark red (half brightness)
+                        width=1,
+                        tags="overlay_line"
+                    )
+                else:
+                    # Update existing image and line positions
+                    self.camera_canvas.coords(self._camera_image_id, x_offset, y_offset)
+                    self.camera_canvas.itemconfig(self._camera_image_id, image=photo)
+                    
+                    # Update red line position
+                    line_y = y_offset + (new_height * 0.5)
+                    line_x1 = x_offset
+                    line_x2 = x_offset + new_width
+                    self.camera_canvas.coords(self._overlay_line_id, line_x1, line_y, line_x2, line_y)
+                
+                # Keep reference to prevent garbage collection
+                self.camera_canvas.image = photo
 
             except Exception as e:
+                # Clear canvas and show error
                 error_msg = f"❌ Error displaying image: {str(e)[:50]}"
-                self.camera_label.config(text=error_msg, image="")
-                # Clear the image reference
-                if hasattr(self.camera_label, 'image'):
-                    self.camera_label.image = None
+                self._show_canvas_message(error_msg, color='red')
 
     def set_source(self, source: str):
         """Set camera source programmatically"""
