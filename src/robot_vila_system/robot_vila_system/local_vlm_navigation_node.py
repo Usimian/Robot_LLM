@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """
-Local Vision-Language Model Navigation Node
+RoboMP2-Enhanced VLM Navigation Node
 
-This ROS2 node uses a local VLM (Qwen2-VL-7B-Instruct) running on RTX 3090 
-for intelligent robot navigation decisions based on camera images and sensor data.
+This ROS2 node integrates RoboMP2 framework components:
+- Goal-Conditioned Multimodal Perceptor (GCMP) for environment state understanding
+- Retrieval-Augmented Multimodal Planner (RAMP) for enhanced planning capabilities
+- Uses local VLM (Qwen2-VL-7B-Instruct) running on RTX 3090
 
-Author: Robot LLM System
+Author: Robot LLM System with RoboMP2 Integration
 """
 
 import json
 import threading
 import time
+import pickle
+import hashlib
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
+from dataclasses import dataclass, asdict
+from collections import deque
 import numpy as np
 
 import rclpy
@@ -33,11 +39,63 @@ import transformers
 transformers.logging.set_verbosity_error()  # Suppress generation warnings
 import cv2
 
-class LocalVLMNavigationNode(Node):
-    """ROS2 Node for local VLM-based robot navigation"""
+# Import RoboMP2 components
+from .robomp2_components import GoalConditionedMultimodalPerceptor, RetrievalAugmentedMultimodalPlanner
+
+# RoboMP2 Data Structures
+@dataclass
+class EnvironmentState:
+    """Represents the current environment state for GCMP"""
+    visual_features: Dict[str, Any]
+    spatial_features: Dict[str, Any]
+    temporal_features: Dict[str, Any]
+    goal_context: Optional[str]
+    timestamp: float
+    state_hash: str = ""
+    
+    def __post_init__(self):
+        """Generate hash for state comparison"""
+        state_data = {
+            'visual': str(self.visual_features),
+            'spatial': str(self.spatial_features),
+            'goal': self.goal_context
+        }
+        self.state_hash = hashlib.md5(str(state_data).encode()).hexdigest()[:8]
+
+@dataclass
+class PolicyEntry:
+    """Represents a policy entry in the RAMP database"""
+    policy_id: str
+    state_signature: str
+    goal_type: str
+    action_sequence: List[str]
+    success_rate: float
+    context_description: str
+    usage_count: int = 0
+    last_used: float = 0.0
+    
+    def update_usage(self):
+        """Update usage statistics"""
+        self.usage_count += 1
+        self.last_used = time.time()
+
+@dataclass
+class GoalSpecification:
+    """Represents a goal for the robot to achieve"""
+    goal_id: str
+    goal_type: str  # "navigation", "manipulation", "exploration", "interaction"
+    description: str
+    target_object: Optional[str] = None
+    target_location: Optional[Dict[str, float]] = None
+    constraints: Optional[Dict[str, Any]] = None
+    priority: float = 1.0
+    timeout: float = 60.0
+
+class RoboMP2NavigationNode(Node):
+    """ROS2 Node for RoboMP2-enhanced VLM navigation with GCMP and RAMP"""
     
     def __init__(self):
-        super().__init__('local_vlm_navigation_node')
+        super().__init__('robomp2_navigation_node')
         
         # Configuration - Optimized for speed
         self.model_name = "Qwen/Qwen2-VL-7B-Instruct"
@@ -60,6 +118,7 @@ class LocalVLMNavigationNode(Node):
         self.current_camera_image = None
         self.current_sensor_data = None
         self.current_lidar_data = None
+        self.previous_ranges = None  # For LiDAR smoothing to reduce flickering
         self.camera_lock = threading.Lock()
         self.sensor_data_lock = threading.Lock()
         self.lidar_lock = threading.Lock()
@@ -70,13 +129,24 @@ class LocalVLMNavigationNode(Node):
         self.request_queue = []
         self.max_queue_size = 1  # Only keep the most recent request
         
+        # RoboMP2 Components
+        self.gcmp = None  # Goal-Conditioned Multimodal Perceptor (initialized after logger)
+        self.ramp = None  # Retrieval-Augmented Multimodal Planner (initialized after logger)
+        self.current_goal: Optional[GoalSpecification] = None
+        self.goal_lock = threading.Lock()
+        self.active_policies: List[PolicyEntry] = []
+        self.policy_execution_history = deque(maxlen=50)
+        
         # Initialize ROS2 components
         self._setup_ros2_components()
+        
+        # Initialize RoboMP2 components
+        self._initialize_robomp2_components()
         
         # Start model loading in background
         self._start_model_loading()
         
-        self.get_logger().info("🤖 Local VLM Navigation Node initialized")
+        self.get_logger().info("🤖 RoboMP2 Navigation Node initialized with GCMP and RAMP")
     
     def _setup_ros2_components(self):
         """Setup ROS2 publishers, subscribers, and services"""
@@ -113,6 +183,13 @@ class LocalVLMNavigationNode(Node):
             self.reliable_qos
         )
         
+        # Filtered LiDAR publisher for stable display
+        self.filtered_lidar_publisher = self.create_publisher(
+            LaserScan,
+            '/scan_filtered',
+            self.sensor_qos
+        )
+        
         # No enhanced sensor publisher needed - GUI will subscribe to /scan directly
         
         # Subscribers
@@ -144,10 +221,43 @@ class LocalVLMNavigationNode(Node):
             self._analysis_service_callback
         )
         
+        # RoboMP2 Services
+        self.goal_service = self.create_service(
+            ExecuteCommand,
+            '/robomp2/set_goal',
+            self._goal_service_callback
+        )
+        
+        self.policy_service = self.create_service(
+            ExecuteCommand,
+            '/robomp2/add_policy',
+            self._policy_service_callback
+        )
+        
         self.get_logger().info("📡 ROS2 components configured")
         self.get_logger().info("   └── Publishers: /vlm/analysis, /vlm/status")
         self.get_logger().info("   └── Subscribers: /robot/sensors, /realsense/camera/color/image_raw, /scan")
-        self.get_logger().info("   └── Services: /vlm/analyze_scene")
+        self.get_logger().info("   └── Services: /vlm/analyze_scene, /robomp2/set_goal, /robomp2/add_policy")
+    
+    def _initialize_robomp2_components(self):
+        """Initialize RoboMP2 GCMP and RAMP components"""
+        try:
+            # Initialize Goal-Conditioned Multimodal Perceptor
+            self.gcmp = GoalConditionedMultimodalPerceptor(self.get_logger())
+            self.get_logger().info("🎯 GCMP (Goal-Conditioned Multimodal Perceptor) initialized")
+            
+            # Initialize Retrieval-Augmented Multimodal Planner
+            policy_db_path = str(Path.home() / "Robot_LLM" / "robomp2_policies.pkl")
+            self.ramp = RetrievalAugmentedMultimodalPlanner(self.get_logger(), policy_db_path)
+            self.get_logger().info("🧠 RAMP (Retrieval-Augmented Multimodal Planner) initialized")
+            
+            self.get_logger().info("✅ RoboMP2 components ready for goal-conditioned navigation")
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ Failed to initialize RoboMP2 components: {e}")
+            # Continue without RoboMP2 - fallback to basic VLM navigation
+            self.gcmp = None
+            self.ramp = None
     
     def _start_model_loading(self):
         """Start model loading in background thread"""
@@ -264,12 +374,36 @@ class LocalVLMNavigationNode(Node):
             self.get_logger().warn(f"Camera image conversion failed: {e}")
     
     def _lidar_scan_callback(self, msg: LaserScan):
-        """Handle incoming LiDAR scans"""
+        """Handle incoming LiDAR scans with improved filtering"""
         try:
             with self.lidar_lock:
-                # Store both processed data and raw ranges for VLM analysis
+                # Store both processed data and cleaned ranges for VLM analysis
                 processed_data = self._process_lidar_scan(msg)
-                processed_data['ranges'] = list(msg.ranges)  # Add raw ranges for VLM
+                
+                # Use processed ranges instead of raw ranges to prevent inf values
+                if hasattr(self, 'previous_ranges') and self.previous_ranges is not None:
+                    processed_data['ranges'] = list(self.previous_ranges)
+                    
+                    # Publish filtered LiDAR data for GUI display
+                    filtered_msg = LaserScan()
+                    filtered_msg.header = msg.header
+                    filtered_msg.angle_min = msg.angle_min
+                    filtered_msg.angle_max = msg.angle_max
+                    filtered_msg.angle_increment = msg.angle_increment
+                    filtered_msg.time_increment = msg.time_increment
+                    filtered_msg.scan_time = msg.scan_time
+                    filtered_msg.range_min = msg.range_min
+                    filtered_msg.range_max = msg.range_max
+                    filtered_msg.ranges = list(self.previous_ranges)
+                    filtered_msg.intensities = msg.intensities
+                    
+                    self.filtered_lidar_publisher.publish(filtered_msg)
+                else:
+                    # Fallback: clean raw ranges
+                    clean_ranges = np.array(msg.ranges)
+                    clean_ranges = np.where(np.isfinite(clean_ranges), clean_ranges, msg.range_max)
+                    processed_data['ranges'] = list(clean_ranges)
+                
                 processed_data['angle_min'] = msg.angle_min
                 processed_data['angle_max'] = msg.angle_max
                 processed_data['angle_increment'] = msg.angle_increment
@@ -293,15 +427,44 @@ class LocalVLMNavigationNode(Node):
         return Image.fromarray(rgb_array, 'RGB')
     
     def _process_lidar_scan(self, msg: LaserScan) -> Dict[str, Any]:
-        """Process LiDAR scan into navigation-relevant format"""
-        ranges = np.array(msg.ranges)
+        """Process LiDAR scan with advanced filtering to eliminate display flickering"""
+        ranges = np.array(msg.ranges, dtype=np.float64)
         
-        # Replace invalid readings with max range
-        ranges = np.where(
-            (ranges < msg.range_min) | (ranges > msg.range_max), 
-            msg.range_max, 
-            ranges
-        )
+        # Step 1: Handle infinite and NaN values aggressively
+        ranges = np.where(np.isfinite(ranges), ranges, msg.range_max)
+        
+        # Step 2: Clamp to sensor limits
+        ranges = np.where(ranges > msg.range_max, msg.range_max, ranges)
+        ranges = np.where(ranges < msg.range_min, msg.range_min, ranges)
+        
+        # Step 3: Additional range validation to prevent extreme values
+        ranges = np.where(ranges > 10.0, 10.0, ranges)  # Cap at 10m
+        ranges = np.where(ranges < 0.05, 0.05, ranges)  # Minimum 5cm
+        
+        # Step 4: Advanced temporal smoothing with outlier detection
+        if hasattr(self, 'previous_ranges') and self.previous_ranges is not None and len(self.previous_ranges) == len(ranges):
+            alpha = 0.2  # More conservative smoothing
+            
+            # Calculate change rate to detect outliers
+            change_rate = np.abs(ranges - self.previous_ranges)
+            outlier_threshold = 2.0  # 2m change threshold
+            
+            # Apply smoothing, but preserve rapid changes for real obstacles
+            smooth_mask = change_rate < outlier_threshold
+            ranges = np.where(smooth_mask, 
+                             alpha * ranges + (1 - alpha) * self.previous_ranges,
+                             ranges)  # Keep rapid changes as-is
+        
+        # Step 5: Median filtering for noise reduction (only for large scans)
+        if len(ranges) > 5:
+            filtered_ranges = np.copy(ranges)
+            for i in range(2, len(ranges) - 2):
+                window = ranges[i-2:i+3]
+                filtered_ranges[i] = np.median(window)
+            ranges = filtered_ranges
+        
+        # Store for next iteration
+        self.previous_ranges = ranges.copy()
         
         # Extract key directions for navigation
         num_readings = len(ranges)
@@ -434,10 +597,46 @@ class LocalVLMNavigationNode(Node):
                 return None
     
     def _run_vlm_navigation_inference(self, image: Optional[Image.Image], prompt: str, sensor_data: Dict[str, float], lidar_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Run local VLM inference for navigation decisions"""
+        """Run RoboMP2-enhanced VLM inference for navigation decisions"""
         start_time = time.time()
         inference_timeout = 2.0  # 2-second timeout for ultra-fast response
         try:
+            # RoboMP2 Enhancement: Extract environment state using GCMP
+            current_state = None
+            relevant_policies = []
+            goal_enhanced_prompt = prompt
+            
+            if self.gcmp and self.ramp and image and lidar_data:
+                try:
+                    # Extract current environment state using GCMP
+                    with self.goal_lock:
+                        current_goal = self.current_goal
+                    
+                    current_state = self.gcmp.extract_state_features(
+                        image, lidar_data, sensor_data, current_goal, EnvironmentState
+                    )
+                    
+                    # Retrieve relevant policies using RAMP
+                    relevant_policies = self.ramp.retrieve_relevant_policies(
+                        current_state, current_goal, top_k=3
+                    )
+                    
+                    # Enhance prompt with goal context and retrieved policies
+                    if current_goal:
+                        goal_enhanced_prompt = f"GOAL: {current_goal.description}\n{prompt}"
+                    
+                    if relevant_policies:
+                        policy_context = "RELEVANT POLICIES:\n"
+                        for i, policy in enumerate(relevant_policies, 1):
+                            if hasattr(policy, 'context_description') and hasattr(policy, 'action_sequence'):
+                                policy_context += f"{i}. {policy.context_description}: {' -> '.join(policy.action_sequence)}\n"
+                        goal_enhanced_prompt = f"{policy_context}\n{goal_enhanced_prompt}"
+                    
+                    self.get_logger().debug(f"🎯 RoboMP2: State extracted, {len(relevant_policies)} policies retrieved")
+                    
+                except Exception as e:
+                    self.get_logger().warn(f"RoboMP2 enhancement failed, falling back to basic VLM: {e}")
+                    # Continue with basic VLM inference
             if image is None:
                 # Cannot navigate without camera image
                 self.get_logger().error("   └── No camera image available - cannot perform navigation")
@@ -462,7 +661,14 @@ class LocalVLMNavigationNode(Node):
             sensor_info = "Sensors: Using LiDAR_360° scan for all distance measurements"
             
             # Process full 360° LiDAR scan (1° resolution, rear 90° obstructed)
-            ranges = lidar_data['ranges']
+            raw_ranges = lidar_data['ranges']
+            ranges = np.array(raw_ranges)
+            
+            # Clean up infinite and invalid values for stable display
+            ranges = np.where(np.isfinite(ranges), ranges, 10.0)  # Replace inf with reasonable max
+            ranges = np.where(ranges > 10.0, 10.0, ranges)  # Cap at 10m
+            ranges = np.where(ranges < 0.1, 0.1, ranges)   # Minimum 10cm
+            
             num_points = len(ranges)
             
             # DEBUG: Log LiDAR data details
@@ -526,9 +732,27 @@ WRONG EXAMPLES TO AVOID:
 DECISION LOGIC (FOLLOW EXACTLY):
 1. ALWAYS use the FRONT_DISTANCE value from sensor data - THIS IS THE DISTANCE DIRECTLY AHEAD
 2. If FRONT_DISTANCE < 1.0m → MUST stop (obstacle too close)
-3. If FRONT_DISTANCE > 2.0m → MUST move forward (LiDAR is accurate, camera may show distant objects)
+3. If FRONT_DISTANCE > 2.0m → MUST move_forward (path is clear, safe to proceed)
 4. If FRONT_DISTANCE 1.0m-2.0m → Use camera to decide if path is navigable
 5. NEVER make up or hallucinate distance values - ONLY use the provided FRONT_DISTANCE
+
+EXPLICIT DECISION EXAMPLES (MEMORIZE THESE):
+- FRONT_DISTANCE: 0.5m → ACTION: stop (0.5 < 1.0 = obstacle too close)
+- FRONT_DISTANCE: 0.8m → ACTION: stop (0.8 < 1.0 = obstacle too close)  
+- FRONT_DISTANCE: 1.5m → ACTION: move_forward or turn (1.0-2.0 range, check camera)
+- FRONT_DISTANCE: 2.5m → ACTION: move_forward (2.5 > 2.0 = clear path ahead)
+- FRONT_DISTANCE: 3.2m → ACTION: move_forward (3.2 > 2.0 = clear path ahead)
+- FRONT_DISTANCE: 5.0m → ACTION: move_forward (5.0 > 2.0 = clear path ahead)
+
+CRITICAL SAFETY RULE: LARGE DISTANCES = SAFE TO MOVE FORWARD!
+
+❌ WRONG LOGIC TO AVOID:
+- "3.2m > 1.0m, so stop" ← THIS IS BACKWARDS! 3.2m means CLEAR PATH!
+- "Distance is large, so dangerous" ← NO! Large distance = SAFE!
+
+✅ CORRECT LOGIC:
+- "3.2m > 2.0m, so move_forward" ← CORRECT! Large distance = SAFE!
+- "0.5m < 1.0m, so stop" ← CORRECT! Small distance = DANGEROUS!
 
 CRITICAL: LiDAR measures ACTUAL distance to obstacles. Camera shows visual appearance but may make distant objects look closer than they are.
 
@@ -676,13 +900,14 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the 4-st
                     'reasoning': 'VLM parsing failed - navigation requires successful analysis'
                 }
             
-            # Mathematical validation - catch VLM math errors using LiDAR data (same as VLM sees)
+            # COMPREHENSIVE VLM LOGIC VALIDATION - catch and correct reasoning errors
             lidar_front_distance = 999.0
             if lidar_data and 'ranges' in lidar_data and len(lidar_data['ranges']) > 0:
                 ranges = lidar_data['ranges']
                 # Front is at index 0 in LiDAR scan
                 lidar_front_distance = ranges[0] if len(ranges) > 0 else 999.0
             
+            # Check for dangerous move_forward commands
             if navigation_result['action'] == 'move_forward' and lidar_front_distance < 1.0:
                 self.get_logger().error(f"   └── VLM MATH ERROR DETECTED: Wants to move forward with LiDAR front distance {lidar_front_distance:.1f}m < 1.0m")
                 self.get_logger().error(f"   └── OVERRIDING VLM decision for safety")
@@ -690,7 +915,18 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the 4-st
                 navigation_result = {
                     'action': 'stop',
                     'confidence': 0.9,
-                    'reasoning': f'Safety override: VLM wanted to move forward but obstacle at {lidar_front_distance:.1f}m < 1.0m'
+                    'reasoning': f'SAFETY OVERRIDE: VLM wanted move_forward but front distance {lidar_front_distance:.1f}m < 1.0m is too close'
+                }
+            
+            # Check for overly cautious stop commands when path is clear
+            elif navigation_result['action'] == 'stop' and lidar_front_distance > 2.5:
+                self.get_logger().warning(f"   └── VLM LOGIC ERROR DETECTED: Wants to stop with clear front distance {lidar_front_distance:.1f}m > 2.5m")
+                self.get_logger().warning(f"   └── CORRECTING overly cautious VLM decision")
+                self.get_logger().warning(f"   └── Overriding stop with MOVE_FORWARD (path is clear)")
+                navigation_result = {
+                    'action': 'move_forward',
+                    'confidence': 0.8,
+                    'reasoning': f'LOGIC CORRECTION: VLM wanted stop but front distance {lidar_front_distance:.1f}m > 2.5m is safe to proceed'
                 }
             
             # Log timing performance
@@ -809,13 +1045,105 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the 4-st
                 'reasoning': f'VLM response parsing failed: {e} - navigation requires successful analysis'
             }
     
+    def _goal_service_callback(self, request, response):
+        """Handle RoboMP2 goal setting requests"""
+        try:
+            # Parse goal from request
+            goal_data = request.command.source_node  # Goal data passed in source_node field
+            
+            if '|' in goal_data:
+                goal_parts = goal_data.split('|')
+                goal_type = goal_parts[0] if len(goal_parts) > 0 else "navigation"
+                goal_description = goal_parts[1] if len(goal_parts) > 1 else "Navigate safely"
+                target_object = goal_parts[2] if len(goal_parts) > 2 else None
+            else:
+                goal_type = "navigation"
+                goal_description = goal_data
+                target_object = None
+            
+            # Create goal specification
+            new_goal = GoalSpecification(
+                goal_id=f"goal_{int(time.time())}",
+                goal_type=goal_type,
+                description=goal_description,
+                target_object=target_object,
+                priority=1.0,
+                timeout=60.0
+            )
+            
+            # Set current goal
+            with self.goal_lock:
+                self.current_goal = new_goal
+            
+            self.get_logger().info(f"🎯 Goal set: {goal_type} - {goal_description}")
+            if target_object:
+                self.get_logger().info(f"   └── Target: {target_object}")
+            
+            response.success = True
+            response.result_message = f"Goal set: {goal_description}"
+            
+        except Exception as e:
+            self.get_logger().error(f"Failed to set goal: {e}")
+            response.success = False
+            response.result_message = str(e)
+        
+        return response
+    
+    def _policy_service_callback(self, request, response):
+        """Handle RoboMP2 policy addition requests"""
+        try:
+            if not self.ramp:
+                response.success = False
+                response.result_message = "RAMP not initialized"
+                return response
+            
+            # Parse policy from request
+            policy_data = request.command.source_node  # Policy data passed in source_node field
+            
+            if '|' in policy_data:
+                parts = policy_data.split('|')
+                policy_id = parts[0] if len(parts) > 0 else f"policy_{int(time.time())}"
+                state_signature = parts[1] if len(parts) > 1 else "unknown"
+                goal_type = parts[2] if len(parts) > 2 else "navigation"
+                actions_str = parts[3] if len(parts) > 3 else "stop"
+                description = parts[4] if len(parts) > 4 else "User-defined policy"
+                
+                action_sequence = actions_str.split(',') if ',' in actions_str else [actions_str]
+                
+                # Create policy entry
+                new_policy = PolicyEntry(
+                    policy_id=policy_id,
+                    state_signature=state_signature,
+                    goal_type=goal_type,
+                    action_sequence=action_sequence,
+                    success_rate=0.5,  # Default success rate
+                    context_description=description
+                )
+                
+                # Add to database
+                self.ramp.add_policy(new_policy)
+                
+                self.get_logger().info(f"➕ Policy added: {policy_id}")
+                response.success = True
+                response.result_message = f"Policy added: {policy_id}"
+            else:
+                response.success = False
+                response.result_message = "Invalid policy format. Use: policy_id|state_signature|goal_type|actions|description"
+            
+        except Exception as e:
+            self.get_logger().error(f"Failed to add policy: {e}")
+            response.success = False
+            response.result_message = str(e)
+        
+        return response
+
 
 def main(args=None):
     """Main function"""
     rclpy.init(args=args)
     
     try:
-        node = LocalVLMNavigationNode()
+        node = RoboMP2NavigationNode()
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass

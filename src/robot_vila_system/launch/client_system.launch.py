@@ -77,11 +77,11 @@ def generate_launch_description():
         condition=IfCondition(gui_enabled)
     )
 
-    # Local VLM Navigation Node (provides local AI navigation services)
-    local_vlm_navigation_node = Node(
+    # RoboMP2 Navigation Node (provides RoboMP2-enhanced AI navigation services)
+    robomp2_navigation_node = Node(
         package='robot_vila_system',
         executable='local_vlm_navigation_node.py',
-        name=vlm_node_name,
+        name='robomp2_navigation_node',
         output='screen',
         emulate_tty=True,
         parameters=[{
@@ -109,10 +109,10 @@ def generate_launch_description():
 
         # Nodes
         ExecuteProcess(
-            cmd=['echo', '🔄 Starting Local VLM Navigation system...'],
+            cmd=['echo', '🔄 Starting RoboMP2 Navigation system...'],
             output='screen',
             condition=IfCondition(vlm_enabled)
         ),
         robot_gui_node,
-        local_vlm_navigation_node,
+        robomp2_navigation_node,
     ])

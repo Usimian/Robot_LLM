@@ -30,7 +30,7 @@ class GUIConfig:
     STATUS_PANEL_HEIGHT = 120
     
     # LiDAR display settings
-    LIDAR_MAX_RANGE = 3.0  # Maximum LiDAR range in meters
+    LIDAR_MAX_RANGE = 2.5  # Maximum LiDAR range in meters
 
     # Font settings
     FONT_FAMILY = "Arial"
@@ -44,7 +44,7 @@ class GUIConfig:
 
     # VILA settings
     DEFAULT_VILA_PROMPT = "Analyze the current camera view for navigation."
-    COSMOS_AUTO_INTERVAL = 2.0  # seconds
+    COSMOS_AUTO_INTERVAL = 3.0  # seconds
 
     # QoS settings
     IMAGE_QOS_DEPTH = 10

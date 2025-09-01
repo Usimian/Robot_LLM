@@ -10,6 +10,7 @@ from typing import Dict, Any, Callable
 from PIL import Image, ImageTk
 import logging
 import math
+import time
 
 from .gui_config import GUIConfig
 from .gui_utils import GUIUtils
@@ -126,13 +127,13 @@ class SystemStatusPanel:
         try:
             # Determine status based on model_loaded flag
             if status_data.get('model_loaded', False):
-                # Show actual model name when loaded
+                # Show RoboMP2-enhanced model name when loaded
                 model_name = status_data.get('model_name', 'Qwen2-VL-7B-Instruct')
-                # Shorten the name for display
+                # Display as RoboMP2-enhanced system
                 if 'Qwen2-VL-7B-Instruct' in model_name:
-                    status_text = "Qwen2-VL-7B-Instruct"
+                    status_text = "RoboMP2 + Qwen2-VL-7B"
                 else:
-                    status_text = model_name.split('/')[-1]  # Get last part after slash
+                    status_text = f"RoboMP2 + {model_name.split('/')[-1]}"  # Get last part after slash
                 color = GUIConfig.COLORS['success']
             elif status_data.get('status') == 'model_load_failed':
                 status_text = "Error"
@@ -247,16 +248,16 @@ class MovementControlPanel:
         self.buttons['stop'].pack(fill=tk.X, pady=2)
 
         # IMU display section (under Stop button)
-        imu_frame = ttk.Frame(buttons_frame)
-        imu_frame.pack(fill=tk.X, pady=(10, 0))
+        self.imu_frame = ttk.Frame(buttons_frame)
+        self.imu_frame.pack(fill=tk.X, pady=(10, 0))
 
         # IMU header
-        ttk.Label(imu_frame, text="IMU:", font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W)
+        ttk.Label(self.imu_frame, text="IMU:", font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W)
         
         # IMU values (X, Y, Z)
         self.imu_labels = {}
         for axis in ['X', 'Y', 'Z']:
-            imu_row = ttk.Frame(imu_frame)
+            imu_row = ttk.Frame(self.imu_frame)
             imu_row.pack(fill=tk.X, padx=(20, 0))
             ttk.Label(imu_row, text=f"{axis}:", font=('TkDefaultFont', 10, 'bold'), width=2).pack(side=tk.LEFT)
             self.imu_labels[axis] = ttk.Label(imu_row, text="--.- m/s²   ", foreground=GUIConfig.COLORS['warning'], font=('TkDefaultFont', 10, 'bold'))
@@ -264,47 +265,54 @@ class MovementControlPanel:
 
         # LiDAR distance display section (below IMU)
         # LiDAR header
-        ttk.Label(imu_frame, text="LiDAR:", font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(10, 0))
+        ttk.Label(self.imu_frame, text="LiDAR:", font=('TkDefaultFont', 10, 'bold')).pack(anchor=tk.W, pady=(10, 0))
         
-        # LiDAR 270° arc visualization (increased height for better fit)
-        self.lidar_canvas = tk.Canvas(imu_frame, width=180, height=120, bg='black', highlightthickness=1, highlightbackground='gray')
+        # LiDAR 270° arc visualization - SIMPLE and STABLE approach
+        self.lidar_canvas = tk.Canvas(self.imu_frame, width=180, height=120, bg='black', highlightthickness=1, highlightbackground='gray')
         self.lidar_canvas.pack(pady=(5, 0))
+        
+        # Data change tracking to prevent unnecessary redraws
+        self.last_lidar_hash = None
         
         # Initialize LiDAR data storage
         self.max_range = GUIConfig.LIDAR_MAX_RANGE
         self.lidar_ranges = [self.max_range] * 360  # Default to max range
         self.raw_lidar_ranges = None  # Will store actual scan data
         
-        # Draw initial arc
+        # Draw initial arc ONCE
         self._draw_lidar_arc()
         
-        # Set up periodic LiDAR display update (every 0.5 seconds)
-        self._schedule_lidar_update()
+        # NO periodic updates - only update when data changes!
+
+
 
         # LiDAR range selection dropdown
-        range_frame = ttk.Frame(imu_frame)
+        range_frame = ttk.Frame(self.imu_frame)
         range_frame.pack(fill=tk.X, pady=(5, 0))
         
         ttk.Label(range_frame, text="Range:", font=('TkDefaultFont', 9)).pack(side=tk.LEFT)
         
-        self.range_var = tk.StringVar(value="3.0")
-        self.range_dropdown = ttk.Combobox(
-            range_frame,
-            textvariable=self.range_var,
-            values=["0.5", "1.0", "2.0", "3.0", "4.0", "5.0"],
-            state="readonly",
-            width=6,
-            font=('TkDefaultFont', 9)
-        )
-        self.range_dropdown.pack(side=tk.RIGHT, padx=(5, 0))
-        self.range_dropdown.bind('<<ComboboxSelected>>', self._on_range_changed)
+        # Range value display
+        self.range_var = tk.DoubleVar(value=3.0)
+        self.range_label = ttk.Label(range_frame, text="3.0m", font=('TkDefaultFont', 9))
+        self.range_label.pack(side=tk.RIGHT)
         
-        ttk.Label(range_frame, text="m", font=('TkDefaultFont', 9)).pack(side=tk.RIGHT)
+        # Range slider (0.4m to 5.0m)
+        self.range_slider = ttk.Scale(
+            range_frame,
+            from_=0.4,
+            to=5.0,
+            variable=self.range_var,
+            orient=tk.HORIZONTAL,
+            length=80,
+            command=self._on_range_slider_changed
+        )
+        self.range_slider.pack(side=tk.RIGHT, padx=(5, 5))
 
         # Movement Enable Toggle Button (moved lower to accommodate LiDAR display)
         self.movement_enabled = True
         self.movement_toggle = ttk.Button(
-            imu_frame,
+            self.imu_frame,
             text="✅ ENABLED",
             command=self._toggle_movement,
             style='Toggle.TButton'
@@ -333,24 +341,23 @@ class MovementControlPanel:
         if self.command_callback:
             self.command_callback(('movement_toggle', self.movement_enabled))
     
-    def _on_range_changed(self, event=None):
-        """Handle LiDAR range selection change"""
+    def _on_range_slider_changed(self, value):
+        """Handle LiDAR range slider change"""
         try:
-            new_range = float(self.range_var.get())
+            new_range = float(value)
             self.max_range = new_range
+            # Update the display label
+            self.range_label.config(text=f"{new_range:.1f}m")
             # Redraw the LiDAR display with new range immediately
             self._draw_lidar_arc()
-        except ValueError:
-            # Invalid range value, revert to previous
-            self.range_var.set(str(self.max_range))
+        except (ValueError, AttributeError):
+            # Invalid range value, revert to default
+            self.max_range = 3.0
+            if hasattr(self, 'range_label'):
+                self.range_label.config(text="3.0m")
     
-    def _schedule_lidar_update(self):
-        """Schedule periodic LiDAR display updates every 0.5 seconds"""
-        # Update the display
-        self._draw_lidar_arc()
-        # Schedule next update in 500ms
-        if hasattr(self, 'lidar_canvas') and self.lidar_canvas.winfo_exists():
-            self.lidar_canvas.after(500, self._schedule_lidar_update)
+    # REMOVED: _schedule_lidar_update - no more periodic updates!
+    # LiDAR display now only updates when data actually changes
 
     def _on_safety_toggle(self):
         """Handle safety checkbox toggle"""
@@ -423,8 +430,8 @@ class MovementControlPanel:
                                f"Front(idx={mid_idx})={self.raw_lidar_ranges[mid_idx]:.2f}m, "
                                f"Left(idx={quarter_idx})={self.raw_lidar_ranges[quarter_idx]:.2f}m, "
                                f"Right(idx={three_quarter_idx})={self.raw_lidar_ranges[three_quarter_idx]:.2f}m")
-                # Data stored, display will be updated by timer
-                pass
+                # IMMEDIATELY update display when new data arrives (no timer!)
+                self._draw_lidar_arc()
             else:
                 # No LiDAR data available
                 logger.debug("No LiDAR ranges data available")
@@ -434,92 +441,74 @@ class MovementControlPanel:
             self.raw_lidar_ranges = None
     
     def _draw_lidar_arc(self, error=False):
-        """Draw the 270° LiDAR arc visualization"""
+        """Draw LiDAR visualization - SIMPLE approach, only update when data changes"""
         try:
-            # Clear canvas
+            # Only redraw if data has actually changed
+            if hasattr(self, 'raw_lidar_ranges') and self.raw_lidar_ranges:
+                # Create a simple hash of the data to detect changes
+                data_hash = hash(str(self.raw_lidar_ranges[:100]))  # Sample first 100 points for speed
+                if data_hash == self.last_lidar_hash:
+                    return  # No change, don't redraw
+                self.last_lidar_hash = data_hash
+            
+            # Clear canvas only when we need to redraw
             self.lidar_canvas.delete("all")
             
-            # Canvas dimensions - top of display is front of robot
+            # Canvas dimensions
             width = 180
-            height = 180
+            height = 120
             center_x = width // 2
-            center_y = height // 2  # Center of canvas
+            center_y = height - (height // 4)  # 1/4 from bottom = 3/4 down from top
             
+            # Show error state
             if error:
-                # Draw error state
                 self.lidar_canvas.create_text(center_x, height//2, text="LiDAR Error", fill="red", font=('Arial', 10))
                 return
             
-            # No range rings - clean display
-            
-            # Draw LiDAR data points using actual scan data
+            # Draw LiDAR data points - simple and direct
             if hasattr(self, 'raw_lidar_ranges') and self.raw_lidar_ranges:
-                # Process real LiDAR scan data
-                # Scan goes from angle_min (-π) to angle_max (+π)
-                # Index 0 = -π (back), middle index = 0 (front), last index = +π (back)
                 num_points = len(self.raw_lidar_ranges)
                 
-                for i, distance in enumerate(self.raw_lidar_ranges):
-                    # Convert scan index to angle in radians
-                    # angle_min = -π, angle_max = +π, so:
-                    scan_angle_rad = -math.pi + (i / (num_points - 1)) * (2 * math.pi)
+                for i in range(0, num_points, 5):  # Sample every 5th point for performance
+                    distance = self.raw_lidar_ranges[i]
                     
-                    # Convert to degrees for easier understanding
+                    # Handle invalid/infinite distances
+                    if not math.isfinite(distance) or distance <= 0 or distance > self.max_range:
+                        continue
+                    
+                    # Convert scan index to angle in radians
+                    scan_angle_rad = -math.pi + (i / (num_points - 1)) * (2 * math.pi)
                     scan_angle_deg = math.degrees(scan_angle_rad)
                     
-                    # Skip rear 90° blind spot - should appear at bottom of display
-                    # Currently excluding front 90° (top), need to exclude back 90° (bottom)
-                    # With current coordinate system, exclude angles around 0° for bottom exclusion
+                    # Skip rear 90° blind spot
                     if -45 <= scan_angle_deg <= 45:
                         continue
                     
-                    # Handle invalid/infinite distances
-                    if not math.isfinite(distance) or distance <= 0:
-                        continue  # Skip invalid points
-                    
-                    # Skip points beyond max range (don't show them at all)
-                    if distance > self.max_range:
-                        continue
-                    
-                    # Calculate point position using polar coordinates
-                    # LIDAR_MAX_RANGE corresponds to left/right edges (90° from center)
-                    # So max display radius is 80 pixels (half the 180px canvas width)
-                    pixel_radius = (distance / self.max_range) * 80
-                    
-                    # Convert scan angle to screen coordinates  
-                    # LiDAR scan: angle 0 = front, π/2 = left, π/-π = back, -π/2 = right
-                    # Screen display: we want front at TOP of screen
-                    # Rotate by -π/2 to put front (0) at top of screen
+                    # Calculate point position
+                    pixel_radius = (distance / self.max_range) * 50
                     screen_angle_rad = scan_angle_rad - math.pi/2
                     
-                    # Calculate screen position (Y flipped for screen coordinates)
                     point_x = center_x + pixel_radius * math.cos(screen_angle_rad)
-                    point_y = center_y - pixel_radius * math.sin(screen_angle_rad)  # Negative Y for screen
+                    point_y = center_y - pixel_radius * math.sin(screen_angle_rad)
                     
-                    # Draw single pixel red dots
-                    color = "red"
-                    self.lidar_canvas.create_rectangle(point_x, point_y, point_x+1, point_y+1, 
-                                                     fill=color, outline=color, width=0)
-            # No test data - only show real LiDAR data when available
+                    # Draw single point - simple rectangle
+                    self.lidar_canvas.create_rectangle(point_x-1, point_y-1, point_x+1, point_y+1, 
+                                                     fill="red", outline="red", width=0)
             
-            # Draw robot position (center dot) - clean and visible
-            self.lidar_canvas.create_oval(center_x-4, center_y-4, center_x+4, center_y+4, 
-                                        fill="cyan", outline="blue", width=2)
-            
-            # Draw front direction indicator - arrow pointing up (front)
-            front_x = center_x
-            front_y = center_y - 20
-            # Draw arrow shape pointing to top of display (front)
-            self.lidar_canvas.create_line(center_x, center_y, front_x, front_y, fill="cyan", width=3)
-            # Arrow head
-            self.lidar_canvas.create_line(front_x-4, front_y+6, front_x, front_y, fill="cyan", width=2)
-            self.lidar_canvas.create_line(front_x+4, front_y+6, front_x, front_y, fill="cyan", width=2)
+            # Draw robot as upward-pointing triangle (front = up)
+            triangle_size = 6
+            triangle_points = [
+                center_x, center_y - triangle_size,      # Top point (front)
+                center_x - triangle_size//2, center_y + triangle_size//2,  # Bottom left
+                center_x + triangle_size//2, center_y + triangle_size//2   # Bottom right
+            ]
+            self.lidar_canvas.create_polygon(triangle_points, fill="cyan", outline="blue", width=1)
             
         except Exception as e:
             logger.error(f"Error drawing LiDAR arc: {e}")
-            # Draw simple error message
-            self.lidar_canvas.create_text(90, 50, text="Display Error", fill="red")
-
+            self.lidar_canvas.delete("all")
+            self.lidar_canvas.create_text(90, 60, text="LiDAR Error", fill="red", font=('Arial', 10))
+    
 
 class CameraPanel:
     """Handles camera display panel"""
