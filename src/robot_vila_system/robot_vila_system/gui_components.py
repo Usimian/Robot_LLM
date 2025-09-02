@@ -484,18 +484,28 @@ class MovementControlPanel:
                     if -45 <= scan_angle_deg <= 45:
                         continue
                     
-                    # Calculate point position
-                    pixel_radius = (distance / self.max_range) * 50
+                    # Calculate point position - use full rectangular canvas space
+                    # Scale distance to canvas dimensions independently for x and y
+                    scaled_distance = distance / self.max_range
+
+                    # Calculate maximum displacements in each direction (rectangular boundaries)
+                    max_dx = center_x  # Can go ±90 pixels in x direction
+                    max_dy = center_y  # Can go ±60 pixels in y direction
+
+                    # Convert to Cartesian coordinates with rectangular scaling
                     screen_angle_rad = scan_angle_rad - math.pi/2
-                    
-                    point_x = center_x + pixel_radius * math.cos(screen_angle_rad)
-                    point_y = center_y - pixel_radius * math.sin(screen_angle_rad)
+                    dx = scaled_distance * max_dx * math.cos(screen_angle_rad)
+                    dy = scaled_distance * max_dy * math.sin(screen_angle_rad)
+
+                    # Map to screen coordinates
+                    point_x = center_x + dx
+                    point_y = center_y - dy
                     
                     # Draw single point - simple rectangle
                     self.lidar_canvas.create_rectangle(point_x-1, point_y-1, point_x+1, point_y+1, 
                                                      fill="red", outline="red", width=0)
             
-            # Draw robot as upward-pointing triangle (front = up)
+            # Draw robot as upward-pointing triangle (front = up) at center
             triangle_size = 6
             triangle_points = [
                 center_x, center_y - triangle_size,      # Top point (front)
@@ -654,6 +664,9 @@ class CameraPanel:
             self._last_update_time = current_time
             
             try:
+                # Clear any existing message text before displaying image
+                self.camera_canvas.delete("message")
+
                 # Calculate available space for image display
                 available_width = GUIConfig.CAMERA_PANEL_WIDTH - 20
                 available_height = GUIConfig.CAMERA_PANEL_HEIGHT - 100
