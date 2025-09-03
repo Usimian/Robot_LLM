@@ -9,7 +9,10 @@ The application is a client/server system.
   The robot has an RGB camera, a depth camera, an IMU, a lidar and wheel odometry.
   All messaging should be done through ROS2 nodes and topics.
 Always check the terminal output for errors after running a terminal command.
+Always open the terminal output after running a terminal command.
 There is only one hardware robot at 192.168.1.166.
 All communications with the robot are requested by this client.
 Build ROS2 packages without --symlink-install
-Do not create simulated data, mock data or fallback to different models.
+Do not create simulated data.
+Do not create mock data.
+Do not create fallbacks.

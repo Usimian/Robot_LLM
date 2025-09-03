@@ -11,7 +11,6 @@ import json
 import threading
 import time
 from typing import Dict
-import logging
 import queue
 from PIL import Image
 import numpy as np
@@ -37,16 +36,17 @@ from .gui_components import (
     ActivityLogPanel
 )
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger('RobotGUIROS2')
+# Import simple logger
+
 
 
 class RobotGUIROS2Node(Node):
     """ROS2 node for the robot GUI"""
     
     def __init__(self, gui_callback):
-        super().__init__('robot_gui')
+        super().__init__('robot_gui_internal')  # Use different name to avoid conflict with launch file
+        
+
         
         self.gui_callback = gui_callback
         self.robot_id = "yahboomcar_x3_01"
@@ -82,6 +82,7 @@ class RobotGUIROS2Node(Node):
         
         self.get_logger().info("🖥️ Robot GUI ROS2 node initialized")
     
+
     def _setup_subscribers(self):
         """Setup ROS2 subscribers"""
         # Sensor data
@@ -220,7 +221,7 @@ class RobotGUIROS2Node(Node):
         self.get_logger().info(f"🚀 Attempting to send robot command: {command_type}")
 
         if not self.robot_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().error("Robot command service not available")
+            self.get_logger().error(f"Robot command service not available")
             return False
 
         self.get_logger().info(f"✅ Robot command service available, sending: {command_type}")
@@ -229,37 +230,33 @@ class RobotGUIROS2Node(Node):
         command_msg = RobotCommand()
         command_msg.robot_id = self.robot_id
         command_msg.command_type = command_type
-        command_msg.timestamp_ns = self.get_clock().now().nanoseconds
-        command_msg.source_node = self.get_name()
 
         # Set command parameters based on type
         # Convert GUI command types to robot interface command types
         if command_type == 'move_forward':
             command_msg.command_type = 'move'
             command_msg.linear_x = parameters.get('speed', 0.5) if parameters else 0.5
-            command_msg.duration = parameters.get('duration', 1.0) if parameters else 1.0
+            command_msg.distance = parameters.get('distance', 0.3) if parameters else 0.3  # 0.3m per button press
         elif command_type == 'move_backward':
             command_msg.command_type = 'move'
             command_msg.linear_x = -(parameters.get('speed', 0.5) if parameters else 0.5)
-            command_msg.duration = parameters.get('duration', 1.0) if parameters else 1.0
+            command_msg.distance = parameters.get('distance', 0.3) if parameters else 0.3  # 0.3m per button press
         elif command_type == 'turn_left':
             command_msg.command_type = 'turn'
-            command_msg.angular = parameters.get('angle', 90.0) if parameters else 90.0  # Positive = left
-            command_msg.angular_speed = parameters.get('speed', 0.5) if parameters else 0.5
-            command_msg.duration = parameters.get('duration', 8.0) if parameters else 8.0
+            command_msg.angular = parameters.get('angle', 45.0) if parameters else 45.0  # 45° per button press
+            command_msg.angular_speed = parameters.get('speed', 0.5) if parameters else 0.5  # rad/s
         elif command_type == 'turn_right':
             command_msg.command_type = 'turn'
-            command_msg.angular = -(parameters.get('angle', 90.0) if parameters else 90.0)  # Negative = right
-            command_msg.angular_speed = parameters.get('speed', 0.5) if parameters else 0.5
-            command_msg.duration = parameters.get('duration', 8.0) if parameters else 8.0
+            command_msg.angular = -(parameters.get('angle', 45.0) if parameters else 45.0)  # -45° per button press
+            command_msg.angular_speed = parameters.get('speed', 0.5) if parameters else 0.5  # rad/s
         elif command_type == 'strafe_left':
             command_msg.command_type = 'move'
             command_msg.linear_y = parameters.get('speed', 0.8) if parameters else 0.8
-            command_msg.duration = parameters.get('duration', 1.0) if parameters else 1.0
+            command_msg.distance = parameters.get('distance', 0.3) if parameters else 0.3
         elif command_type == 'strafe_right':
             command_msg.command_type = 'move'
             command_msg.linear_y = -(parameters.get('speed', 0.8) if parameters else 0.8)
-            command_msg.duration = parameters.get('duration', 1.0) if parameters else 1.0
+            command_msg.distance = parameters.get('distance', 0.3) if parameters else 0.3
         elif command_type == 'stop':
             command_msg.command_type = 'stop'
             command_msg.linear_x = 0.0
@@ -287,8 +284,14 @@ class RobotGUIROS2Node(Node):
 class RobotGUIROS2:
     """Main GUI class using component-based architecture"""
     
-    def __init__(self, root):
-        logger.debug("🔧 DEBUG: RobotGUIROS2.__init__ entered")
+    def __init__(self, root, logger=None):
+        # Use provided logger or create a simple one
+        if logger is None:
+            import logging
+            logger = logging.getLogger('RobotGUI')
+            logger.setLevel(logging.INFO)
+        self.logger = logger
+        self.logger.debug(f"🔧 DEBUG: RobotGUIROS2.__init__ entered")
         self.root = root
 
         # Use configuration constants
@@ -296,46 +299,46 @@ class RobotGUIROS2:
         
         # Defer ROS2 initialization until after GUI is created
         self.ros_node = None
-        logger.debug("🔧 ROS2 initialization deferred until after GUI creation")
+        self.logger.debug(f"🔧 ROS2 initialization deferred until after GUI creation")
 
         # Initialize GUI state
-        logger.debug("🔧 Initializing GUI state...")
+        self.logger.debug(f"🔧 Initializing GUI state...")
         self._initialize_gui_state()
-        logger.debug("✅ GUI state initialized")
+        self.logger.debug(f"✅ GUI state initialized")
 
         # Initialize GUI components
-        logger.debug("🔧 Initializing GUI components...")
+        self.logger.debug(f"🔧 Initializing GUI components...")
         self._initialize_gui_components()
-        logger.debug("✅ GUI components initialized")
+        self.logger.debug(f"✅ GUI components initialized")
 
         # Create GUI
-        logger.debug("🔧 Creating GUI...")
+        self.logger.debug( f"🔧 Creating GUI...")
         self._create_gui()
-        logger.debug("✅ GUI created successfully")
+        self.logger.debug( f"✅ GUI created successfully")
 
         # Start background processes
-        logger.debug("🔧 Starting background processes...")
+        self.logger.debug( f"🔧 Starting background processes...")
         self._start_background_processes()
-        logger.debug("✅ Background processes started")
+        self.logger.debug( f"✅ Background processes started")
 
         # Set window title
-        logger.debug("🔧 Setting window title...")
+        self.logger.debug( f"🔧 Setting window title...")
         self._set_window_title_safely()
-        logger.debug("✅ Window title set")
+        self.logger.debug( f"✅ Window title set")
 
         # Set up window close event handler
-        logger.debug("🔧 Setting up window close handler...")
+        self.logger.debug( f"🔧 Setting up window close handler...")
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
-        logger.debug("✅ Window close handler set")
+        self.logger.debug( f"✅ Window close handler set")
 
         # Log initialization
-        logger.info("🤖 Robot GUI ROS2 initialized (debug mode)")
-        logger.info("   └── All communication via ROS2 topics and services")
-        logger.info("   └── Component-based architecture")
+        self.logger.info( f"🤖 Robot GUI ROS2 initialized (debug mode)")
+        self.logger.info( f"   └── All communication via ROS2 topics and services")
+        self.logger.info( f"   └── Component-based architecture")
 
     def _initialize_gui_state(self):
         """Initialize GUI state variables"""
-        logger.debug("🔧 DEBUG: Initializing GUI state variables")
+        self.logger.debug( f"🔧 DEBUG: Initializing GUI state variables")
 
         self.robot_id = "yahboomcar_x3_01"
         self.robot_data = {}
@@ -357,67 +360,67 @@ class RobotGUIROS2:
 
     def _initialize_gui_components(self):
         """Initialize GUI component classes"""
-        logger.debug("🔧 Initializing GUI components...")
+        self.logger.debug( f"🔧 Initializing GUI components...")
 
         try:
             # Create component instances with proper callbacks
-            logger.debug("🔧 Creating SystemStatusPanel...")
+            self.logger.debug( f"🔧 Creating SystemStatusPanel...")
             self.system_panel = SystemStatusPanel(self.root, self._update_system_status)
-            logger.debug("✅ SystemStatusPanel created")
+            self.logger.debug( f"✅ SystemStatusPanel created")
 
-            logger.debug("🔧 Creating MovementControlPanel...")
+            self.logger.debug( f"🔧 Creating MovementControlPanel...")
             self.movement_panel = MovementControlPanel(self.root, self._handle_movement_command)
-            logger.debug("✅ MovementControlPanel created")
+            self.logger.debug( f"✅ MovementControlPanel created")
 
-            logger.debug("🔧 Creating CameraPanel...")
+            self.logger.debug( f"🔧 Creating CameraPanel...")
             self.camera_panel = CameraPanel(self.root, self._handle_camera_update)
-            logger.debug("✅ CameraPanel created")
+            self.logger.debug( f"✅ CameraPanel created")
 
-            logger.debug("🔧 Creating VLMAnalysisPanel...")
+            self.logger.debug( f"🔧 Creating VLMAnalysisPanel...")
             self.vlm_panel = VLMAnalysisPanel(self.root, self._handle_vlm_analysis, self.log_message)
-            logger.debug("✅ VLMAnalysisPanel created")
+            self.logger.debug( f"✅ VLMAnalysisPanel created")
 
-            logger.debug("🔧 Creating ActivityLogPanel...")
+            self.logger.debug( f"🔧 Creating ActivityLogPanel...")
             self.log_panel = ActivityLogPanel(self.root)
-            logger.debug("✅ ActivityLogPanel created")
+            self.logger.debug( f"✅ ActivityLogPanel created")
 
         except Exception as e:
-            logger.error(f"❌ Error initializing GUI components: {e}")
+            self.logger.error( f"❌ Error initializing GUI components: {e}")
             import traceback
             traceback.print_exc()
             raise
     
     def _create_gui(self):
         """Create GUI using component classes"""
-        logger.debug("🔧 Creating component-based GUI design")
+        self.logger.debug( f"🔧 Creating component-based GUI design")
         
         try:
             # Configure root window first
-            logger.debug("🔧 Configuring root window...")
+            self.logger.debug( f"🔧 Configuring root window...")
             self.root.geometry(f"{GUIConfig.WINDOW_WIDTH}x{GUIConfig.WINDOW_HEIGHT}")
             self.root.title(self.base_title)
-            logger.debug("✅ Root window configured")
+            self.logger.debug( f"✅ Root window configured")
 
             # Process any pending events
-            logger.debug("🔧 Processing pending events...")
+            self.logger.debug( f"🔧 Processing pending events...")
             self.root.update_idletasks()
-            logger.debug("✅ Pending events processed")
+            self.logger.debug( f"✅ Pending events processed")
 
             # Main container
-            logger.debug("🔧 Creating main frame...")
+            self.logger.debug( f"🔧 Creating main frame...")
             main_frame = ttk.Frame(self.root)
             main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-            logger.debug("✅ Main frame created")
+            self.logger.debug( f"✅ Main frame created")
             
             # Create component frames
-            logger.debug("🔧 Creating component frames...")
+            self.logger.debug( f"🔧 Creating component frames...")
             self._create_component_frames(main_frame)
-            logger.debug("✅ Component frames created")
+            self.logger.debug( f"✅ Component frames created")
 
-            logger.debug("✅ Component-based GUI created successfully")
+            self.logger.debug( f"✅ Component-based GUI created successfully")
 
         except Exception as e:
-            logger.error(f"❌ Error creating GUI: {e}")
+            self.logger.error( f"❌ Error creating GUI: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -426,38 +429,38 @@ class RobotGUIROS2:
         """Create and layout component frames"""
         try:
             # Top section: System Status
-            logger.debug("🔧 Creating system status panel...")
+            self.logger.debug( f"🔧 Creating system status panel...")
             self.system_panel.create(parent)
-            logger.debug("✅ System status panel created")
+            self.logger.debug( f"✅ System status panel created")
 
             # Middle section: Main controls (3 columns)
-            logger.debug("🔧 Creating middle frame...")
+            self.logger.debug( f"🔧 Creating middle frame...")
             middle_frame = ttk.Frame(parent)
             middle_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-            logger.debug("✅ Middle frame created")
+            self.logger.debug( f"✅ Middle frame created")
 
             # Left column: Movement Controls
-            logger.debug("🔧 Creating movement control panel...")
+            self.logger.debug( f"🔧 Creating movement control panel...")
             self.movement_panel.create(middle_frame)
-            logger.debug("✅ Movement control panel created")
+            self.logger.debug( f"✅ Movement control panel created")
 
             # Center column: Camera Feed
-            logger.debug("🔧 Creating camera panel...")
+            self.logger.debug( f"🔧 Creating camera panel...")
             self.camera_panel.create(middle_frame)
-            logger.debug("✅ Camera panel created")
+            self.logger.debug( f"✅ Camera panel created")
 
             # Right column: Analysis
-            logger.debug("🔧 Creating VLM analysis panel...")
+            self.logger.debug( f"🔧 Creating VLM analysis panel...")
             self.vlm_panel.create(middle_frame)
-            logger.debug("✅ VLM analysis panel created")
+            self.logger.debug( f"✅ VLM analysis panel created")
 
             # Bottom section: Activity Log
-            logger.debug("🔧 Creating activity log panel...")
+            self.logger.debug( f"🔧 Creating activity log panel...")
             self.log_panel.create(parent)
-            logger.debug("✅ Activity log panel created")
+            self.logger.debug( f"✅ Activity log panel created")
 
         except Exception as e:
-            logger.error(f"❌ Error creating component frames: {e}")
+            self.logger.error( f"❌ Error creating component frames: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -466,44 +469,44 @@ class RobotGUIROS2:
         """Set window title safely"""
         try:
             self.root.title(self.base_title)
-            logger.debug(f"🔧 DEBUG: Window title set to: {self.base_title}")
+            self.logger.debug( f"🔧 DEBUG: Window title set to: {self.base_title}")
         except Exception as e:
-            logger.debug(f"🔧 DEBUG: Failed to set window title: {e}")
+            self.logger.debug( f"🔧 DEBUG: Failed to set window title: {e}")
 
     def _start_background_processes(self):
         """Start background processes"""
-        logger.debug("🔧 Starting background processes...")
+        self.logger.debug( f"🔧 Starting background processes...")
 
         # Initialize ROS2 now that GUI is created
         try:
-            logger.debug("🔧 Initializing ROS2...")
+            self.logger.debug( f"🔧 Initializing ROS2...")
             if not rclpy.ok():
                 rclpy.init()
-            logger.debug("✅ ROS2 initialized")
+            self.logger.debug( f"✅ ROS2 initialized")
 
-            logger.debug("🔧 Creating ROS2 node...")
+            self.logger.debug( f"🔧 Creating ROS2 node...")
             self.ros_node = RobotGUIROS2Node(self._ros_callback)
-            logger.info("✅ ROS2 node created")
+            self.logger.info( f"✅ ROS2 node created")
 
             # Start ROS2 spinning in background thread
-            logger.debug("🔧 Starting ROS2 spinning thread...")
+            self.logger.debug( f"🔧 Starting ROS2 spinning thread...")
             self.ros_spin_thread = threading.Thread(target=self._spin_ros, daemon=True)
             self.ros_spin_thread.start()
-            logger.debug("✅ ROS2 spinning thread started")
+            self.logger.debug( f"✅ ROS2 spinning thread started")
 
         except Exception as e:
-            logger.error(f"❌ Error initializing ROS2: {e}")
+            self.logger.error( f"❌ Error initializing ROS2: {e}")
             raise
 
         # Start system status updates
-        logger.debug("🔧 Starting system status updates...")
+        self.logger.debug( f"🔧 Starting system status updates...")
         self.root.after(1000, self._update_system_status)  # Start after 1 second
-        logger.debug("✅ System status updates scheduled")
+        self.logger.debug( f"✅ System status updates scheduled")
 
     def _spin_ros(self):
         """Spin ROS2 node in background thread"""
         try:
-            logger.debug("🔧 ROS2 spinning started in background thread")
+            self.logger.debug( f"🔧 ROS2 spinning started in background thread")
             # Use spin_once with timeout to allow checking for cleanup requests
             while rclpy.ok() and not self._cleanup_requested:
                 try:
@@ -511,15 +514,15 @@ class RobotGUIROS2:
                 except Exception as e:
                     if self._cleanup_requested:
                         break
-                    logger.warning(f"⚠️ ROS2 spin_once error: {e}")
+                    self.logger.warning( f"⚠️ ROS2 spin_once error: {e}")
                     # If there's an error, sleep briefly to avoid tight loop
                     import time
                     time.sleep(0.1)
-            logger.debug("🛑 ROS2 spinning stopped")
+            self.logger.debug( f"🛑 ROS2 spinning stopped")
         except Exception as e:
-            logger.error(f"❌ ROS2 spin error: {e}")
+            self.logger.error( f"❌ ROS2 spin error: {e}")
         finally:
-            logger.debug("🔚 ROS2 spin thread exiting")
+            self.logger.debug( f"🔚 ROS2 spin thread exiting")
 
     # _process_updates method removed - using direct ROS2 callbacks
 
@@ -555,9 +558,9 @@ class RobotGUIROS2:
                 self.system_panel.update_robot_status({'movement_enabled': self.movement_enabled})
         elif callable(command):
             # Legacy callback function
-            logger.error(f"Unknown movement command type: {type(command)}")
+            self.logger.error( f"Unknown movement command type: {type(command)}")
         else:
-            logger.error(f"Unknown movement command format: {command}")
+            self.logger.error( f"Unknown movement command format: {command}")
 
     def _handle_camera_update(self, message_type: str, data):
         """Handle camera update from camera panel"""
@@ -577,7 +580,7 @@ class RobotGUIROS2:
             else:
                 self.log_message(f"📷 Image loaded but keeping robot source as selected")
         else:
-            logger.warning(f"Unknown camera update type: {message_type}")
+            self.logger.warning( f"Unknown camera update type: {message_type}")
 
     def _load_image_file_from_path(self, file_path: str):
         """Load image from file path"""
@@ -638,9 +641,9 @@ class RobotGUIROS2:
             elif message_type == 'command_ack':
                 self._handle_command_ack(data)
             else:
-                logger.warning(f"Unknown ROS message type: {message_type}")
+                self.logger.warning( f"Unknown ROS message type: {message_type}")
         except Exception as e:
-            logger.error(f"Error handling ROS callback {message_type}: {e}")
+            self.logger.error( f"Error handling ROS callback {message_type}: {e}")
 
     def _handle_sensor_data(self, data):
         """Handle sensor data updates"""
@@ -690,7 +693,7 @@ class RobotGUIROS2:
                 pil_image = Image.fromarray(rgb_array, 'RGB')
                 self.camera_panel.update_camera_image(pil_image)
             except Exception as e:
-                logger.error(f"Error converting camera image: {e}")
+                self.logger.error( f"Error converting camera image: {e}")
                 if hasattr(self, 'camera_panel') and hasattr(self.camera_panel, 'camera_label'):
                     self.camera_panel.camera_label.config(text=f"❌ Camera error: {str(e)}", image="")
 
@@ -732,7 +735,7 @@ class RobotGUIROS2:
                     }
                     self.system_panel.update_robot_status(status_data)
         except Exception as e:
-            logger.error(f"Error updating system status: {e}")
+            self.logger.error( f"Error updating system status: {e}")
 
         # Schedule next update
         self.root.after(GUIConfig.UPDATE_INTERVAL_MS, self._update_system_status)
@@ -756,7 +759,7 @@ class RobotGUIROS2:
         if hasattr(self, 'log_panel'):
             self.log_panel.log_message(message)
         else:
-            logger.info(message)
+            self.logger.info( message)
     
     def _immediate_exit(self):
         """Immediate exit without any cleanup to prevent hanging"""
@@ -766,7 +769,7 @@ class RobotGUIROS2:
     
     def _on_window_close(self):
         """Handle window close event with timeout protection"""
-        logger.info("🔒 Window close event triggered")
+        self.logger.info( f"🔒 Window close event triggered")
         
         # Set up a timeout to force exit if hanging
         import threading
@@ -790,16 +793,16 @@ class RobotGUIROS2:
             self.root.destroy()
             
         except Exception as e:
-            logger.error(f"❌ Error during window close: {e}")
+            self.logger.error( f"❌ Error during window close: {e}")
         
         # If we get here, exit normally
-        logger.info("🚪 Normal exit")
+        self.logger.info( f"🚪 Normal exit")
         os._exit(0)
     
     def _cleanup_simple(self):
         """Simple cleanup without waiting for threads"""
         try:
-            logger.info("🧹 Simple cleanup starting...")
+            self.logger.info( f"🧹 Simple cleanup starting...")
             
             # Stop auto analysis timer
             self._stop_auto_cosmos_timer()
@@ -820,10 +823,10 @@ class RobotGUIROS2:
                 except:
                     pass  # Ignore errors during cleanup
                     
-            logger.info("✅ Simple cleanup completed")
+            self.logger.info( f"✅ Simple cleanup completed")
             
         except Exception as e:
-            logger.warning(f"⚠️ Error during simple cleanup: {e}")
+            self.logger.warning( f"⚠️ Error during simple cleanup: {e}")
 
     def cleanup(self):
         """Cleanup resources (for Ctrl-C compatibility)"""
@@ -841,7 +844,7 @@ class RobotGUIROS2:
         elif event_type == 'auto_execute_toggle':
             self._toggle_auto_execute(data)
         else:
-            logger.warning(f"Unknown VLM analysis event: {event_type}")
+            self.logger.warning( f"Unknown VLM analysis event: {event_type}")
     
     def _toggle_auto_execute(self, enabled: bool):
         """Toggle auto execute VLM recommendations on/off"""
@@ -872,8 +875,6 @@ class RobotGUIROS2:
         try:
             # Use the ROS2 node to send real analysis request to VLM service
             if hasattr(self, 'ros_node'):
-                self.log_message(f"🔍 VLM analysis requested: {prompt[:50]}...")
-                
                 # Call the actual VLM service
                 # Create VLM service client if it doesn't exist
                 if not hasattr(self.ros_node, 'vlm_client'):
@@ -891,15 +892,10 @@ class RobotGUIROS2:
                 command_msg = RobotCommand()
                 command_msg.robot_id = self.robot_id
                 command_msg.command_type = "vlm_analysis"
-                # Use source_node field to pass the prompt (temporary workaround)
-                command_msg.source_node = f"{self.ros_node.get_name()}|{prompt}"
-                command_msg.timestamp_ns = self.ros_node.get_clock().now().nanoseconds
 
                 request = ExecuteCommand.Request()
                 request.command = command_msg
 
-                self.log_message(f"📡 Calling VLM analysis service...")
-                
                 # Call service asynchronously
                 future = self.ros_node.vlm_client.call_async(request)
                 
@@ -945,7 +941,7 @@ class RobotGUIROS2:
                                 else:
                                     self.log_message(f"📋 VLM recommends: {action} (confidence: {confidence:.2f}) - Auto-execute disabled")
                                 
-                                self.log_message(f"✅ VLM analysis: {analysis_text[:80]}...")
+                                self.log_message(f"✅ VLM analysis: {analysis_text}")
                                 
                             except json.JSONDecodeError as e:
                                 self.log_message(f"❌ Error parsing VLM JSON response: {e}")
@@ -1036,23 +1032,27 @@ class RobotGUIROS2:
     
     def _on_window_close(self):
         """Handle window close event (X button clicked)"""
-        logger.info("🚪 Window close requested")
+        self.logger.info(f"🚪 Window close requested")
         try:
             # Stop auto-analysis timer
             if hasattr(self, 'auto_cosmos_timer') and self.auto_cosmos_timer:
                 self.root.after_cancel(self.auto_cosmos_timer)
                 self.auto_cosmos_timer = None
-            
+
+            # Stop ROS2 spinning thread
+            if hasattr(self, 'ros_spin_thread') and self.ros_spin_thread and self.ros_spin_thread.is_alive():
+                self.logger.info("🛑 Stopping ROS2 spinning thread...")
+                # Don't join - just let it finish naturally
+
             # Cleanup ROS2 resources
-            logger.info("🧹 Cleaning up GUI resources...")
+            self.logger.info(f"🧹 Cleaning up GUI resources...")
             if hasattr(self, 'ros_node') and self.ros_node:
-                self.ros_node.destroy_node()
-            
-            # Shutdown ROS2
-            if rclpy.ok():
-                rclpy.shutdown()
-            
-            logger.info("✅ GUI cleanup complete")
+                try:
+                    self.ros_node.destroy_node()
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Error destroying ROS2 node: {e}")
+
+            self.logger.info(f"✅ GUI cleanup complete")
             
             # Send SIGTERM to parent process group to terminate launch
             import os
@@ -1060,76 +1060,108 @@ class RobotGUIROS2:
             try:
                 # Get the process group ID and send SIGTERM to terminate launch
                 pgid = os.getpgid(0)
-                logger.info(f"🛑 Sending SIGTERM to process group {pgid}")
+                self.logger.info( f"🛑 Sending SIGTERM to process group {pgid}")
                 os.killpg(pgid, signal.SIGTERM)
             except Exception as e:
-                logger.warning(f"⚠️ Could not terminate process group: {e}")
+                self.logger.warning( f"⚠️ Could not terminate process group: {e}")
             
             # Destroy the window and exit
-            self.root.quit()
-            self.root.destroy()
-            
-            # Final exit
-            logger.info("🚪 Exiting application...")
-            os._exit(0)
+            self.logger.info("🔒 Destroying window...")
+            try:
+                self.root.quit()
+                self.root.destroy()
+            except Exception as e:
+                self.logger.warning(f"⚠️ Error destroying window: {e}")
+
+            # Final exit - don't call os._exit here, let main thread handle it
+            self.logger.info("🚪 Window close cleanup finished")
             
         except Exception as e:
-            logger.error(f"❌ Error during window close: {e}")
-            # Force exit if cleanup fails
-            import os
-            os._exit(0)
+            self.logger.error(f"❌ Error during window close: {e}")
+            # Don't force exit - let main thread handle cleanup
 
 
 def main():
     """Main entry point"""
     import signal
-    
+
     app = None
-    
+
     def signal_handler(signum, frame):
         """Handle Ctrl-C and other signals consistently with window close"""
-        logger.info(f"🛑 Received signal {signum} (Ctrl-C)")
+        print(f"🛑 Received signal {signum} (Ctrl-C)")
         if app:
-            logger.info("🧹 Initiating graceful shutdown...")
+            print("🧹 Initiating graceful shutdown...")
             app._on_window_close()  # Use the same cleanup path as window close
         else:
-            logger.info("🚪 No app to cleanup, exiting...")
+            print("🚪 No app to cleanup, exiting...")
             import os
             os._exit(0)
-    
+
     # Set up signal handlers for consistent shutdown
     signal.signal(signal.SIGINT, signal_handler)   # Ctrl-C
     signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
-    
+
     try:
-        logger.info("🚀 Starting Robot GUI application...")
+        # Import required modules
+        import sys
+        import rclpy
+
+        # Check if ROS2 is already initialized (from launch file)
+        if not rclpy.ok():
+            rclpy.init()
+
+        # Try to use ROS2 logging if available
+        ros_logger = None
+
+        try:
+            if rclpy.ok():
+                # ROS2 is already initialized, we can use ROS2 logging
+                from rclpy.logging import get_logger
+                ros_logger = get_logger('robot_gui_main')
+                print("✅ Using ROS2 logging in main()")
+            else:
+                # ROS2 not initialized, use stderr
+                raise Exception("ROS2 not initialized")
+        except Exception as log_error:
+            # Fallback to stderr logging
+            print(f"⚠️ Falling back to stderr logging: {log_error}")
+            def ros_logger_fallback(level, message):
+                level_name = "INFO" if level == "info" else level.upper()
+                sys.stderr.write(f"[robot_gui_main] [{level_name}] {message}\n")
+                sys.stderr.flush()
+            ros_logger = type('FallbackLogger', (), {
+                'info': lambda msg: ros_logger_fallback('info', msg),
+                'warn': lambda msg: ros_logger_fallback('warn', msg),
+                'error': lambda msg: ros_logger_fallback('error', msg)
+            })()
 
         # Create Tkinter root
-        logger.debug("🔧 Creating Tkinter root...")
+        ros_logger.info("🔧 Creating Tkinter root...")
         root = tk.Tk()
-        logger.debug("✅ Tkinter root created")
+        ros_logger.info("✅ Tkinter root created")
 
-        # Create GUI application
-        logger.debug("🔧 Creating RobotGUIROS2 application...")
-        app = RobotGUIROS2(root)
-        logger.info("✅ Robot GUI application ready")
+        # Create GUI application with the ROS logger
+        ros_logger.info("🔧 Creating RobotGUIROS2 application...")
+        app = RobotGUIROS2(root, ros_logger)
+        ros_logger.info("✅ Robot GUI application ready")
 
         # Start Tkinter main loop
-        logger.debug("🔧 Starting Tkinter main loop...")
+        ros_logger.info("🔧 Starting Tkinter main loop...")
         root.mainloop()
-        
+
         # If we reach here, the window was closed
-        logger.info("🔒 Main loop exited")
+        ros_logger.info("🔒 Main loop exited")
 
     except KeyboardInterrupt:
-        logger.info("🛑 Received keyboard interrupt")
+        print("🛑 Received keyboard interrupt")
     except Exception as e:
-        logger.error(f"❌ Application error: {e}")
+        print(f"❌ Application error: {e}")
         import traceback
         traceback.print_exc()
     finally:
         # Don't do cleanup here - it was already done in _on_window_close
-        logger.info("👋 Robot GUI application exited")
+        print("👋 Robot GUI application exited")
         # Use os._exit to avoid any remaining cleanup issues
         import os
         os._exit(0)

@@ -13,6 +13,9 @@ from robot_msgs.msg import RobotCommand
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 
+# Import simple logger
+
+
 class CommandGatewayValidator(Node):
     """
     Validates that ALL robot commands go through the single gateway
@@ -21,6 +24,9 @@ class CommandGatewayValidator(Node):
     
     def __init__(self):
         super().__init__('command_gateway_validator')
+        
+        # Simple logger for clean output
+
         
         self.robot_id = "yahboomcar_x3_01"
         
@@ -43,6 +49,7 @@ class CommandGatewayValidator(Node):
         self.get_logger().info("🛡️ Command Gateway Validator started")
         self.get_logger().info("   └── Monitoring single command gateway architecture [[memory:5366669]]")
     
+
     def _setup_monitoring(self):
         """Setup monitoring for all command channels"""
         
@@ -100,7 +107,7 @@ class CommandGatewayValidator(Node):
         """Monitor legitimate commands from gateway"""
         self.command_sources['gateway'] += 1
         
-        self.get_logger().info(f"✅ LEGITIMATE: Command {msg.command_type} from gateway (source: {msg.source_node})")
+        self.get_logger().info(f"✅ LEGITIMATE: Command {msg.command_type} from gateway (robot: {msg.robot_id})")
         
         # Validate command structure
         self._validate_command_structure(msg)
@@ -143,12 +150,6 @@ class CommandGatewayValidator(Node):
         
         if not msg.command_type:
             issues.append("Missing command_type")
-        
-        if not msg.source_node:
-            issues.append("Missing source_node field")
-        
-        if msg.timestamp_ns == 0:
-            issues.append("Missing timestamp")
         
         # Report issues
         if issues:
@@ -225,7 +226,7 @@ def test_gateway_compliance():
         test_duration = 30.0  # seconds
         start_time = time.time()
         
-        validator.get_logger().info(f"🧪 Starting {test_duration}s gateway compliance test")
+        validator.logger.info(f"🧪 Starting {test_duration}s gateway compliance test")
         
         while time.time() - start_time < test_duration:
             rclpy.spin_once(validator, timeout_sec=0.1)
@@ -233,18 +234,18 @@ def test_gateway_compliance():
         # Generate final report
         report = validator.generate_compliance_report()
         
-        validator.get_logger().info("📋 FINAL COMPLIANCE REPORT:")
-        validator.get_logger().info(f"   └── Status: {report['compliance_status']}")
-        validator.get_logger().info(f"   └── Total Commands: {report['total_commands']}")
-        validator.get_logger().info(f"   └── Gateway: {report['command_sources']['gateway']}")
-        validator.get_logger().info(f"   └── Direct: {report['command_sources']['direct']}")
-        validator.get_logger().info(f"   └── Bypass: {report['command_sources']['bypass']}")
+        validator.logger.info("📋 FINAL COMPLIANCE REPORT:")
+        validator.logger.info(f"   └── Status: {report['compliance_status']}")
+        validator.logger.info(f"   └── Total Commands: {report['total_commands']}")
+        validator.logger.info(f"   └── Gateway: {report['command_sources']['gateway']}")
+        validator.logger.info(f"   └── Direct: {report['command_sources']['direct']}")
+        validator.logger.info(f"   └── Bypass: {report['command_sources']['bypass']}")
         
         # Save report
         with open('gateway_compliance_report.json', 'w') as f:
             json.dump(report, f, indent=2)
         
-        validator.get_logger().info("📄 Report saved to gateway_compliance_report.json")
+        validator.logger.info("📄 Report saved to gateway_compliance_report.json")
         
     except KeyboardInterrupt:
         pass

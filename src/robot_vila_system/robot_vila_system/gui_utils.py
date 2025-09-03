@@ -11,6 +11,7 @@ import logging
 from typing import Tuple
 
 from .gui_config import GUIConfig
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -164,5 +165,5 @@ class GUIUtils:
         try:
             return callback(*args, **kwargs)
         except Exception as e:
-            logger.error(f"Callback error: {e}")
+            logger.error( f"Callback error: {e}")
             return None

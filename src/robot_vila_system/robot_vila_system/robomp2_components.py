@@ -296,7 +296,7 @@ class RetrievalAugmentedMultimodalPlanner:
                     self.policy_database = pickle.load(f)
                 self.logger.info(f"📚 Loaded {len(self.policy_database)} policies from database")
             except Exception as e:
-                self.logger.warn(f"Failed to load policy database: {e}")
+                self.logger.warning(f"Failed to load policy database: {e}")
                 self._initialize_default_policies()
         else:
             self._initialize_default_policies()

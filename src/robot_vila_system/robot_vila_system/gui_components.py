@@ -14,6 +14,7 @@ import time
 
 from .gui_config import GUIConfig
 from .gui_utils import GUIUtils
+import logging
 
 logger = logging.getLogger('GUIComponents')
 
@@ -103,7 +104,7 @@ class SystemStatusPanel:
 
 
         except Exception as e:
-            logger.error(f"Error updating hardware status: {e}")
+            logger.error( f"Error updating hardware status: {e}")
 
     def update_robot_status(self, status_data: Dict[str, Any]):
         """Update robot status display"""
@@ -148,7 +149,7 @@ class SystemStatusPanel:
             self.status_labels['model'].config(text=status_text, foreground=color)
 
         except Exception as e:
-            logger.error(f"Error updating Model status: {e}")
+            logger.error( f"Error updating Model status: {e}")
             self.status_labels['model'].config(text="Error", foreground=GUIConfig.COLORS['error'])
 
 
@@ -407,7 +408,7 @@ class MovementControlPanel:
             if 'accel_z' in sensor_data:
                 self.imu_labels['Z'].config(text=f"{sensor_data['accel_z']:.2f} m/s²", foreground=GUIConfig.COLORS['success'])
         except Exception as e:
-            logger.error(f"Error updating IMU data: {e}")
+            logger.error( f"Error updating IMU data: {e}")
             # Set error states for IMU labels
             for axis in ['X', 'Y', 'Z']:
                 if axis in self.imu_labels:
@@ -425,7 +426,7 @@ class MovementControlPanel:
                     mid_idx = len(self.raw_lidar_ranges) // 2
                     quarter_idx = len(self.raw_lidar_ranges) // 4
                     three_quarter_idx = 3 * len(self.raw_lidar_ranges) // 4
-                    logger.debug(f"LiDAR scan received: {len(self.raw_lidar_ranges)} points, "
+                    logger.debug( f"LiDAR scan received: {len(self.raw_lidar_ranges)} points, "
                                f"Back(idx=0)={self.raw_lidar_ranges[0]:.2f}m, "
                                f"Front(idx={mid_idx})={self.raw_lidar_ranges[mid_idx]:.2f}m, "
                                f"Left(idx={quarter_idx})={self.raw_lidar_ranges[quarter_idx]:.2f}m, "
@@ -434,10 +435,10 @@ class MovementControlPanel:
                 self._draw_lidar_arc()
             else:
                 # No LiDAR data available
-                logger.debug("No LiDAR ranges data available")
+                logging.getLogger('GUIComponents').debug("No LiDAR ranges data available")
                 self.raw_lidar_ranges = None
         except Exception as e:
-            logger.error(f"Error updating LiDAR data: {e}")
+            logger.error( f"Error updating LiDAR data: {e}")
             self.raw_lidar_ranges = None
     
     def _draw_lidar_arc(self, error=False):
@@ -515,7 +516,7 @@ class MovementControlPanel:
             self.lidar_canvas.create_polygon(triangle_points, fill="cyan", outline="blue", width=1)
             
         except Exception as e:
-            logger.error(f"Error drawing LiDAR arc: {e}")
+            logger.error( f"Error drawing LiDAR arc: {e}")
             self.lidar_canvas.delete("all")
             self.lidar_canvas.create_text(90, 60, text="LiDAR Error", fill="red", font=('Arial', 10))
     
@@ -955,7 +956,7 @@ class VLMAnalysisPanel:
         if self.analysis_callback:
             self.analysis_callback('request_analysis', prompt)
             if self.log_callback:
-                self.log_callback(f"🔍 Sending analysis request: {prompt[:50]}...")
+                self.log_callback(f"🔍 Sending analysis request: {prompt}")
 
     def update_analysis_result(self, result_data: Dict[str, Any]):
         """Update analysis result display"""

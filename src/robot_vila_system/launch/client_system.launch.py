@@ -6,7 +6,7 @@ Launches GUI and Local VLM Navigation nodes for robot control and analysis
 
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument, LogInfo, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, LogInfo, ExecuteProcess, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition
 
@@ -79,6 +79,7 @@ def generate_launch_description():
         emulate_tty=True,
         condition=IfCondition(gui_enabled)
     )
+
 
     # RoboMP2 Navigation Node (provides RoboMP2-enhanced AI navigation services)
     robomp2_navigation_node = Node(
