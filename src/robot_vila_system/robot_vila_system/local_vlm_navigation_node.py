@@ -5,7 +5,7 @@ RoboMP2-Enhanced VLM Navigation Node
 This ROS2 node integrates RoboMP2 framework components:
 - Goal-Conditioned Multimodal Perceptor (GCMP) for environment state understanding
 - Retrieval-Augmented Multimodal Planner (RAMP) for enhanced planning capabilities
-- Uses local VLM (Qwen2-VL-7B-Instruct) running on RTX 3090
+- Uses local VLM (Qwen2.5-VL-7B-Instruct) running on RTX 3090
 
 Author: Robot LLM System with RoboMP2 Integration
 """
@@ -34,13 +34,16 @@ from std_msgs.msg import String
 # Computer Vision and ML
 import torch
 from PIL import Image
-from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
+from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor
 import transformers
 transformers.logging.set_verbosity_error()  # Suppress generation warnings
 import cv2
 
 # Import RoboMP2 components
 from .robomp2_components import GoalConditionedMultimodalPerceptor, RetrievalAugmentedMultimodalPlanner
+
+# Import configuration
+from .gui_config import GUIConfig
 
 # RoboMP2 Data Structures
 @dataclass
@@ -98,7 +101,7 @@ class RoboMP2NavigationNode(Node):
         super().__init__('robomp2_navigation_node')
         
         # Configuration - Optimized for speed
-        self.model_name = "Qwen/Qwen2-VL-7B-Instruct"
+        self.model_name = GUIConfig.DEFAULT_VLM_MODEL
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.max_memory_gb = 16  # Leave 8GB free on RTX 3090 for stability
         
@@ -263,7 +266,7 @@ class RoboMP2NavigationNode(Node):
         """Start model loading in background thread"""
         def load_model():
             try:
-                self.get_logger().info("🔄 Loading Qwen2-VL-7B-Instruct model for navigation...")
+                self.get_logger().info(f"🔄 Loading {self.model_name.split('/')[-1]} model for navigation...")
                 self._publish_status("loading", "Initializing local VLM model...")
                 
                 # Load processor and tokenizer with speed optimizations
@@ -281,8 +284,8 @@ class RoboMP2NavigationNode(Node):
                 )
                 
                 # Load model with speed and memory optimization
-                self.get_logger().info("   └── Loading Qwen2-VL model with speed optimization...")
-                self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+                self.get_logger().info("   └── Loading Qwen2.5-VL model with speed optimization...")
+                self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                     self.model_name,
                     dtype=torch.float16,        # Use FP16 for speed and memory efficiency (fixed deprecated torch_dtype)
                     device_map="cuda:0",        # Force GPU placement to avoid meta device issues
@@ -326,7 +329,7 @@ class RoboMP2NavigationNode(Node):
                     self.get_logger().info(f"   └── GPU memory: {memory_used:.2f}GB / {memory_total:.2f}GB")
                 
                 self.model_loaded = True
-                self.get_logger().info("✅ Qwen2-VL-7B-Instruct loaded successfully for navigation")
+                self.get_logger().info(f"✅ {self.model_name.split('/')[-1]} loaded successfully for navigation")
                 self._publish_status("ready", "Local VLM navigation system ready", model_name=self.model_name)
                         
             except Exception as e:
@@ -801,7 +804,7 @@ EXAMPLES:
 
 Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the 4-step format above exactly]"""
             
-            self.get_logger().debug("   └── Running Qwen2-VL inference for navigation...")
+            self.get_logger().debug("   └── Running Qwen2.5-VL inference for navigation...")
             
             # Use proper chat template for compatibility
             messages = [
@@ -823,7 +826,7 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the 4-st
             )
             
             # Process inputs with speed optimization
-            self.get_logger().debug("   └── Processing inputs with Qwen2-VL processor...")
+            self.get_logger().debug("   └── Processing inputs with Qwen2.5-VL processor...")
             
             # Resize image for faster processing
             if image.size[0] > self.max_image_size or image.size[1] > self.max_image_size:

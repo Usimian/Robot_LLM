@@ -69,14 +69,14 @@ The VLM analysis service (`/vlm/analyze_scene`) now automatically:
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Client PC (AMD64)                        │
+┌────────────────────────────────────────────────────────────┐
+│                    Client PC (AMD64)                       │
 │  ┌─────────────────────────────────────────────────────────┤
 │  │              RoboMP2 Navigation Node                    │
 │  │  ┌─────────────────┐  ┌─────────────────────────────────┤
 │  │  │      GCMP       │  │             RAMP                │
-│  │  │ (Multimodal     │  │ (Retrieval-Augmented           │
-│  │  │  Perceptor)     │  │  Multimodal Planner)           │
+│  │  │ (Multimodal     │  │ (Retrieval-Augmented            │
+│  │  │  Perceptor)     │  │  Multimodal Planner)            │
 │  │  │                 │  │                                 │
 │  │  │ • Visual        │  │ • Policy Database               │
 │  │  │ • Spatial       │  │ • Retrieval System              │
@@ -84,20 +84,20 @@ The VLM analysis service (`/vlm/analyze_scene`) now automatically:
 │  │  │ • Goal Context  │  │ • Dynamic Learning              │
 │  │  └─────────────────┘  └─────────────────────────────────┤
 │  │                                                         │
-│  │              Qwen2-VL-7B-Instruct                       │
+│  │              Qwen2.5-VL-7B-Instruct                     │
 │  │              (Goal-Enhanced Prompts)                    │
 │  └─────────────────────────────────────────────────────────┤
-└─────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────┘
                               │
                         ROS2 Network
                               │
 ┌─────────────────────────────────────────────────────────────┐
-│              Robot (Jetson Orin Nano)                      │
-│  • RGB Camera (Intel RealSense D435i)                      │
-│  • Depth Camera                                            │
-│  • LiDAR (S2)                                              │
-│  • IMU                                                     │
-│  • Mecanum Wheels                                          │
+│              Robot (Jetson Orin Nano)                       │
+│  • RGB Camera (Intel RealSense D435i)                       │
+│  • Depth Camera                                             │
+│  • LiDAR (S2)                                               │
+│  • IMU                                                      │
+│  • Mecanum Wheels                                           │
 └─────────────────────────────────────────────────────────────┘
 ```
 

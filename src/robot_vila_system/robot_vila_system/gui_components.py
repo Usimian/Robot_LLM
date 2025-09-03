@@ -128,10 +128,10 @@ class SystemStatusPanel:
             # Determine status based on model_loaded flag
             if status_data.get('model_loaded', False):
                 # Show RoboMP2-enhanced model name when loaded
-                model_name = status_data.get('model_name', 'Qwen2-VL-7B-Instruct')
+                model_name = status_data.get('model_name', GUIConfig.DEFAULT_VLM_MODEL)
                 # Display as RoboMP2-enhanced system
-                if 'Qwen2-VL-7B-Instruct' in model_name:
-                    status_text = "RoboMP2 + Qwen2-VL-7B"
+                if GUIConfig.DEFAULT_VLM_MODEL.split('/')[-1] in model_name:
+                    status_text = "RoboMP2 + Qwen2.5-VL-7B"
                 else:
                     status_text = f"RoboMP2 + {model_name.split('/')[-1]}"  # Get last part after slash
                 color = GUIConfig.COLORS['success']

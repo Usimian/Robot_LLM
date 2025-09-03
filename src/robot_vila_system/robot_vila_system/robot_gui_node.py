@@ -1022,8 +1022,8 @@ class RobotGUIROS2:
             # Perform analysis
             self._auto_cosmos_analysis()
             # Schedule next analysis using configurable interval
-            # Use COSMOS_AUTO_INTERVAL if available, otherwise fallback to VILA_AUTO_INTERVAL
-            interval_seconds = getattr(GUIConfig, 'COSMOS_AUTO_INTERVAL', getattr(GUIConfig, 'VILA_AUTO_INTERVAL', 1.0))
+            # Use VLM_AUTO_INTERVAL if available
+            interval_seconds = getattr(GUIConfig, 'VLM_AUTO_INTERVAL', getattr(GUIConfig, 'VLM_AUTO_INTERVAL', 1.0))
             interval_ms = int(interval_seconds * 1000)  # Convert seconds to milliseconds
             self.auto_cosmos_timer = self.root.after(interval_ms, self._schedule_auto_cosmos_analysis)
     

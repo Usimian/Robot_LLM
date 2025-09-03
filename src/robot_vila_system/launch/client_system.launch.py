@@ -10,6 +10,9 @@ from launch.actions import DeclareLaunchArgument, LogInfo, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition
 
+# Import configuration
+from robot_vila_system.gui_config import GUIConfig
+
 def generate_launch_description():
     """Generate launch description for Local VLM Navigation client system with GUI"""
     
@@ -29,7 +32,7 @@ def generate_launch_description():
     # Local VLM Navigation arguments
     vlm_model_name_arg = DeclareLaunchArgument(
         'vlm_model_name',
-        default_value='Qwen/Qwen2-VL-7B-Instruct',
+        default_value=GUIConfig.DEFAULT_VLM_MODEL,
         description='HuggingFace model name for local VLM'
     )
 

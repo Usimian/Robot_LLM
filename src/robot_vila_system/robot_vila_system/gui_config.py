@@ -9,7 +9,7 @@ class GUIConfig:
     """Centralized GUI configuration constants"""
 
     # Window settings
-    WINDOW_TITLE = "Robot Nemotron Client"
+    WINDOW_TITLE = "Robot VLM Navigation Client"
     WINDOW_WIDTH = 1200
     WINDOW_HEIGHT =1000
 
@@ -44,7 +44,10 @@ class GUIConfig:
 
     # VILA settings
     DEFAULT_VILA_PROMPT = "Analyze the current camera view for navigation."
-    COSMOS_AUTO_INTERVAL = 3.0  # seconds
+    VLM_AUTO_INTERVAL = 3.0  # seconds
+
+    # Model settings
+    DEFAULT_VLM_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 
     # QoS settings
     IMAGE_QOS_DEPTH = 10
