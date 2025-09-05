@@ -965,18 +965,18 @@ class VLMAnalysisPanel:
             nav_commands = result_data['navigation_commands']
             action = nav_commands.get('action', 'unknown')
             confidence = nav_commands.get('confidence', 0.0)
-            
+
             # Format the action nicely
             action_display = {
                 'move_forward': 'Move Forward',
-                'turn_left': 'Turn Left', 
+                'turn_left': 'Turn Left',
                 'turn_right': 'Turn Right',
                 'stop': 'Stop',
                 'move_backward': 'Move Backward',
                 'strafe_left': 'Strafe Left',
                 'strafe_right': 'Strafe Right'
             }.get(action, action.title())
-            
+
             command_text = f"{action_display}, Confidence: {confidence:.2f}"
             self.command_label.config(text=command_text)
         
@@ -987,9 +987,19 @@ class VLMAnalysisPanel:
             # Configure bold tag for movement commands
             self.result_text.tag_configure("bold", font=("TkDefaultFont", 10, "bold"))
 
-            # Insert formatted result
+            # Insert formatted result with enhanced reasoning display
             self.result_text.insert(tk.END, f"Success: {result_data.get('success', False)}\n")
             self.result_text.insert(tk.END, f"{result_data.get('analysis_result', 'N/A')}\n")
+
+            # Display model reasoning prominently
+            if result_data.get('reasoning'):
+                self.result_text.insert(tk.END, "\n🤖 Model Reasoning:\n")
+                self.result_text.insert(tk.END, f"{result_data['reasoning']}\n")
+
+            # Display full analysis if available
+            if result_data.get('full_analysis'):
+                self.result_text.insert(tk.END, "\n📋 Complete Analysis:\n")
+                self.result_text.insert(tk.END, f"{result_data['full_analysis']}\n")
 
             # Handle navigation commands with bold formatting
             if result_data.get('navigation_commands'):

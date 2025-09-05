@@ -910,13 +910,17 @@ class RobotGUIROS2:
                                 result_data = json.loads(response.result_message)
                                 
                                 analysis_text = result_data.get('analysis', 'Analysis complete')
+                                reasoning = result_data.get('reasoning', 'No reasoning provided')
+                                full_analysis = result_data.get('full_analysis', analysis_text)
                                 navigation_commands = result_data.get('navigation_commands', {'action': 'stop', 'confidence': 0.0})
                                 action = navigation_commands.get('action', 'stop')
                                 confidence = navigation_commands.get('confidence', 0.0)
-                                
+
                                 cosmos_result = {
                                     'success': True,
                                     'analysis_result': analysis_text,
+                                    'reasoning': reasoning,
+                                    'full_analysis': full_analysis,
                                     'navigation_commands': navigation_commands,
                                     'confidence': confidence,
                                     'timestamp_ns': self.ros_node.get_clock().now().nanoseconds
@@ -928,20 +932,23 @@ class RobotGUIROS2:
                                 
                                 # EXECUTE THE RECOMMENDED ACTION (if auto-execute enabled)
                                 if self.auto_execute_enabled:
-                                    if action != "stop" and confidence > 0.6:
+                                    self.log_message(f"🤖 DEBUG: Checking execution conditions - action: {action}, confidence: {confidence:.2f}, movement_enabled: {self.movement_enabled}")
+                                    if action != "stop" and confidence > 0.4:
                                         if self.movement_enabled:
                                             self.log_message(f"🤖 Executing VLM recommendation: {action} (confidence: {confidence:.2f})")
                                             self.ros_node.send_robot_command(action)
                                         else:
                                             self.log_message(f"🔒 Movement disabled - VLM recommended: {action}")
                                     else:
-                                        self.log_message(f"🛑 VLM recommends: {action} (confidence: {confidence:.2f})")
+                                        self.log_message(f"🛑 VLM recommends: {action} (confidence: {confidence:.2f}) - Conditions not met (confidence <= 0.6 or action is stop)")
                                         if action == "stop":
                                             self.ros_node.send_robot_command("stop")
                                 else:
                                     self.log_message(f"📋 VLM recommends: {action} (confidence: {confidence:.2f}) - Auto-execute disabled")
                                 
                                 self.log_message(f"✅ VLM analysis: {analysis_text}")
+                                if reasoning and reasoning != 'No reasoning provided':
+                                    self.log_message(f"🤖 Model reasoning: {reasoning}")
                                 
                             except json.JSONDecodeError as e:
                                 self.log_message(f"❌ Error parsing VLM JSON response: {e}")

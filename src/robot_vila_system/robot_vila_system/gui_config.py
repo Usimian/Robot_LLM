@@ -32,6 +32,9 @@ class GUIConfig:
     # LiDAR display settings
     LIDAR_MAX_RANGE = 2.5  # Maximum LiDAR range in meters
 
+    # LiDAR scan quantization settings
+    LIDAR_SCAN_QUANTIZATION_DEGREES = 3  # Degrees per scan point (1 = 360 points, 2 = 180 points)
+
     # Font settings
     FONT_FAMILY = "Arial"
     FONT_SIZE_NORMAL = 10

@@ -110,7 +110,7 @@ class RoboMP2NavigationNode(Node):
         
         # Aggressive speed optimization settings
         self.max_image_size = 112  # Reduce to 112x112 for maximum speed (16x fewer pixels than 448x448)
-        self.max_new_tokens = 128  # Sufficient tokens for detailed reasoning
+        self.max_new_tokens = 512  # Further increased to ensure complete VLM responses
         self.use_cache = True      # Enable KV cache for faster inference
         self.skip_chat_template = True  # Skip expensive chat template processing
         
@@ -389,6 +389,9 @@ class RoboMP2NavigationNode(Node):
         """Handle incoming LiDAR scans with improved filtering"""
         try:
             with self.lidar_lock:
+                # Store RAW LiDAR message for VLM analysis (unfiltered)
+                self.latest_raw_lidar_msg = msg
+
                 # Store both processed data and cleaned ranges for VLM analysis
                 processed_data = self._process_lidar_scan(msg)
                 
@@ -523,13 +526,15 @@ class RoboMP2NavigationNode(Node):
                 # Use default prompt
                 prompt = "Analyze the current scene for robot navigation"
             
-                # Run VLM inference with LiDAR data
-                navigation_result = self._run_vlm_navigation_inference(current_image, prompt, sensor_data, lidar_data)
+                # Run VLM inference with RAW LiDAR data (not processed/filtered)
+                navigation_result = self._run_vlm_navigation_inference(current_image, prompt, sensor_data, lidar_data, raw_lidar_msg=None)
             
-                # Format response
+                # Format response with enhanced reasoning display
                 analysis_result = {
                     'success': True,
-                    'analysis': f"Local VLM analysis: {navigation_result['reasoning']}",
+                    'analysis': f"VLM Decision: {navigation_result['action']} (confidence: {navigation_result['confidence']:.2f})",
+                    'reasoning': navigation_result['reasoning'],
+                    'full_analysis': f"Local VLM Analysis:\n• Action: {navigation_result['action']}\n• Confidence: {navigation_result['confidence']:.2f}\n• Reasoning: {navigation_result['reasoning']}\n• Raw Response: {navigation_result.get('vlm_response', 'N/A')}",
                     'navigation_commands': {
                         'action': navigation_result['action'],
                         'confidence': navigation_result['confidence']
@@ -537,9 +542,11 @@ class RoboMP2NavigationNode(Node):
                     'confidence': navigation_result['confidence']
                 }
 
-                # Pack response
+                # Pack response with enhanced reasoning
                 result_data = {
                     'analysis': analysis_result['analysis'],
+                    'reasoning': analysis_result['reasoning'],
+                    'full_analysis': analysis_result['full_analysis'],
                     'navigation_commands': analysis_result['navigation_commands'],
                     'confidence': analysis_result['confidence']
                 }
@@ -559,6 +566,7 @@ class RoboMP2NavigationNode(Node):
                 confidence = navigation_result['confidence']
                 
                 self.get_logger().info(f"📋 VLM ANALYSIS COMPLETE: {action} (confidence: {confidence:.2f})")
+                self.get_logger().info(f"🤖 MODEL REASONING: {navigation_result['reasoning']}")
                 self.get_logger().info("   └── Execution control handled by GUI - not auto-executing")
             
                 self.get_logger().info(f"✅ Analysis complete: {navigation_result['action']} (confidence: {navigation_result['confidence']:.2f})")
@@ -610,7 +618,7 @@ class RoboMP2NavigationNode(Node):
             else:
                 return None
     
-    def _run_vlm_navigation_inference(self, image: Optional[Image.Image], prompt: str, sensor_data: Dict[str, float], lidar_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _run_vlm_navigation_inference(self, image: Optional[Image.Image], prompt: str, sensor_data: Dict[str, float], lidar_data: Optional[Dict[str, Any]] = None, raw_lidar_msg: Optional[object] = None) -> Dict[str, Any]:
         """Run RoboMP2-enhanced VLM inference for navigation decisions"""
         start_time = time.time()
         inference_timeout = 2.0  # 2-second timeout for ultra-fast response
@@ -671,62 +679,166 @@ class RoboMP2NavigationNode(Node):
                     'reasoning': 'No LiDAR data available - navigation requires both camera and LiDAR data'
                 }
             
-            # Build sensor information from LiDAR data
-            sensor_info = "Sensors: Using LiDAR_360° scan for all distance measurements"
+            # Build sensor information from RAW LiDAR data
+            sensor_info = "Sensors: Using RAW LiDAR_360° scan for all distance measurements"
+
+            # Use RAW LiDAR data directly from ROS message to avoid filtering artifacts
+            # Get the raw data from the most recent LiDAR message stored in callback
+            with self.lidar_lock:
+                if hasattr(self, 'latest_raw_lidar_msg') and self.latest_raw_lidar_msg:
+                    raw_msg = self.latest_raw_lidar_msg
+                    raw_ranges = np.array(raw_msg.ranges, dtype=np.float64)
+                else:
+                    # Fallback to processed data if no raw message available
+                    raw_ranges = np.array(lidar_data['ranges']) if lidar_data else np.array([])
+
+            # For VLM analysis, use minimally processed sensor data
+            # Only handle infinite/NaN values, preserve ALL actual distances including very close ones
+            vlm_ranges = np.where(np.isfinite(raw_ranges), raw_ranges, 30.0)  # Replace inf/NaN with 30m
+            vlm_ranges = np.where(vlm_ranges > 30.0, 30.0, vlm_ranges)  # Cap at 30m
+            # CRITICAL: Do NOT artificially set minimum distances - let model see actual close obstacles
+
+            # DEBUG: Check LiDAR message properties
+            if hasattr(self, 'latest_raw_lidar_msg') and self.latest_raw_lidar_msg:
+                msg = self.latest_raw_lidar_msg
+                self.get_logger().info(f"   └── LiDAR MSG CHECK: angle_min={msg.angle_min:.3f}, angle_max={msg.angle_max:.3f}, angle_increment={msg.angle_increment:.6f}")
+                self.get_logger().info(f"   └── LiDAR MSG CHECK: range_min={msg.range_min:.3f}, range_max={msg.range_max:.3f}")
+
+            # DEBUG: Log the actual data being sent to VLM
+            self.get_logger().info(f"   └── VLM DATA CHECK: Front distance to VLM: {vlm_ranges[0]:.3f}m")
+            if len(vlm_ranges) > 90:
+                left_idx = 90 if 90 < len(vlm_ranges) else len(vlm_ranges)//4
+                right_idx = 270 if 270 < len(vlm_ranges) else 3*len(vlm_ranges)//4
+                self.get_logger().info(f"   └── VLM DATA CHECK: Left({left_idx}): {vlm_ranges[left_idx]:.3f}m, Right({right_idx}): {vlm_ranges[right_idx]:.3f}m")
+            self.get_logger().info(f"   └── VLM DATA CHECK: Raw ranges sample: {vlm_ranges[:10] if len(vlm_ranges) > 10 else vlm_ranges}")
+
+            # Check if there's a unit conversion issue
+            if vlm_ranges[0] > 0:
+                potential_meters = vlm_ranges[0]
+                potential_mm = potential_meters * 1000
+                potential_cm = potential_meters * 100
+                self.get_logger().info(f"   └── UNIT CHECK: {potential_meters:.3f}m could be {potential_mm:.0f}mm or {potential_cm:.1f}cm")
             
-            # Process full 360° LiDAR scan (1° resolution, rear 90° obstructed)
-            raw_ranges = lidar_data['ranges']
-            ranges = np.array(raw_ranges)
+            num_points = len(vlm_ranges)
             
-            # Clean up infinite and invalid values for stable display
-            ranges = np.where(np.isfinite(ranges), ranges, 10.0)  # Replace inf with reasonable max
-            ranges = np.where(ranges > 10.0, 10.0, ranges)  # Cap at 10m
-            ranges = np.where(ranges < 0.1, 0.1, ranges)   # Minimum 10cm
-            
-            num_points = len(ranges)
-            
-            # DEBUG: Log LiDAR data details
-            self.get_logger().info(f"   └── DEBUG: LiDAR has {num_points} points")
-            self.get_logger().info(f"   └── DEBUG: Front distance (ranges[0]) = {ranges[0]:.3f}m")
+            # DEBUG: Log LiDAR data details - USE SAME DATA AS VLM
+            current_time = self.get_clock().now().nanoseconds / 1e9
+            self.get_logger().info(f"   └── DEBUG: LiDAR has {num_points} points (timestamp: {current_time:.3f})")
+            self.get_logger().info(f"   └── DEBUG: Front distance (vlm_ranges[0]) = {vlm_ranges[0]:.3f}m")
             if num_points > 100:
-                self.get_logger().info(f"   └── DEBUG: ranges[10] = {ranges[10]:.3f}m, ranges[50] = {ranges[50]:.3f}m")
-            
-            # Create 360° distance profile (every 10° for VLM readability)
-            lidar_profile = []
-            for i in range(0, 360, 10):  # Every 10 degrees
-                if i < num_points:
-                    angle_desc = f"{i}°"
-                    if 135 <= i <= 225:  # Rear 90° obstructed
-                        lidar_profile.append(f"{angle_desc}:obstructed")
+                self.get_logger().info(f"   └── DEBUG: vlm_ranges[10] = {vlm_ranges[10]:.3f}m, vlm_ranges[50] = {vlm_ranges[50]:.3f}m")
+
+            # EXTRA VERIFICATION: Will be logged after quantization
+
+            # Create quantized LiDAR scan for VLM using configurable quantization
+            quantization_degrees = GUIConfig.LIDAR_SCAN_QUANTIZATION_DEGREES
+            num_points = int(360 / quantization_degrees)  # Calculate number of points
+            quantized_ranges = np.zeros(num_points, dtype=np.float64)  # Initialize with zeros
+
+            if len(vlm_ranges) > 0:
+                # Calculate the angular resolution of the original scan
+                if hasattr(self, 'latest_raw_lidar_msg') and self.latest_raw_lidar_msg:
+                    msg = self.latest_raw_lidar_msg
+                    angle_range = msg.angle_max - msg.angle_min
+                    original_resolution = angle_range / (len(vlm_ranges) - 1) if len(vlm_ranges) > 1 else 0
+                    self.get_logger().info(f"   └── LiDAR: {len(vlm_ranges)} points, angle_range: {np.degrees(angle_range):.1f}°, resolution: {np.degrees(original_resolution):.2f}°")
+
+                    # Create proper angle mapping based on actual LiDAR angles
+                    original_angles_rad = np.linspace(msg.angle_min, msg.angle_max, len(vlm_ranges))
+                    original_angles_deg = np.degrees(original_angles_rad)
+
+                    # Target angles for quantization (configurable degrees per point)
+                    target_angles = np.arange(0, 360, quantization_degrees)
+
+                    # Map target angles to original angle range
+                    # Handle LiDARs that don't start at 0 degrees (e.g., -180° to +180°)
+                    # For LiDARs starting at negative angles, we need to shift them to 0-360° range
+                    if msg.angle_min < 0:
+                        # Shift negative angles to positive range for proper interpolation
+                        shifted_angles_deg = (original_angles_deg + 360) % 360
+                        scaled_target_angles = target_angles  # Target is already 0-360°
+                        quantized_ranges = np.interp(scaled_target_angles, shifted_angles_deg, vlm_ranges,
+                                                   left=vlm_ranges[0], right=vlm_ranges[-1])
                     else:
-                        dist = ranges[i] if i < len(ranges) else 0.0
-                        lidar_profile.append(f"{angle_desc}:{dist:.1f}m")
-                        # DEBUG: Log first few values
-                        if i <= 20:
-                            self.get_logger().info(f"   └── DEBUG: ranges[{i}] = {dist:.3f}m")
-            
+                        # Standard case for LiDARs starting at 0°
+                        quantized_ranges = np.interp(target_angles, original_angles_deg, vlm_ranges,
+                                                   left=vlm_ranges[0], right=vlm_ranges[-1])
+                else:
+                    # Fallback if no message available
+                    original_angles = np.linspace(0, 359, len(vlm_ranges))
+                    target_angles = np.arange(0, 360, quantization_degrees)
+                    quantized_ranges = np.interp(target_angles, original_angles, vlm_ranges,
+                                               left=vlm_ranges[0], right=vlm_ranges[-1])
+
+                # Handle obstructed rear area (135-225 degrees)
+                obstructed_start_idx = int(135 / quantization_degrees)
+                obstructed_end_idx = int(225 / quantization_degrees)
+                quantized_ranges[obstructed_start_idx:obstructed_end_idx] = -1  # Mark as obstructed
+
+            # Create distance profile for VLM prompt - show all quantized points
+            lidar_profile = []
+            for i in range(num_points):  # Show all actual quantized points
+                angle_deg = i * quantization_degrees  # Convert index back to angle
+                angle_desc = f"{angle_deg}°"
+                if quantized_ranges[i] < 0:  # Obstructed
+                    lidar_profile.append(f"{angle_desc}:obstructed")
+                else:
+                    dist = quantized_ranges[i]
+                    lidar_profile.append(f"{angle_desc}:{dist:.2f}m")
+
             lidar_360 = ", ".join(lidar_profile)
-            
-            # Extract front distance explicitly for VLM clarity
-            front_distance = ranges[0] if len(ranges) > 0 else 0.0
-            sensor_info += f", FRONT_DISTANCE: {front_distance:.1f}m, LiDAR_360°: [{lidar_360}]"
+
+            # Log the quantization
+            self.get_logger().info(f"   └── LiDAR quantized: {len(vlm_ranges)} -> {num_points} points ({quantization_degrees}° resolution)")
+            # Calculate sample indices based on quantization
+            idx_90 = int(90 / quantization_degrees)
+            idx_180 = int(180 / quantization_degrees)
+            idx_270 = int(270 / quantization_degrees)
+            self.get_logger().info(f"   └── Sample quantized: [0°]={quantized_ranges[0]:.3f}m, [90°]={quantized_ranges[min(idx_90, num_points-1)]:.3f}m, [180°]={quantized_ranges[min(idx_180, num_points-1)]:.3f}m, [270°]={quantized_ranges[min(idx_270, num_points-1)]:.3f}m")
+
+            # EXTRA VERIFICATION: Log what we're actually sending to VLM
+            current_time = self.get_clock().now().nanoseconds / 1e9
+            self.get_logger().info(f"   └── VERIFICATION: Data sent to VLM (timestamp: {current_time:.3f}) - Front: {quantized_ranges[0]:.3f}m")
+            self.get_logger().info(f"   └── VERIFICATION: Left: {quantized_ranges[min(idx_90, num_points-1)]:.3f}m, Right: {quantized_ranges[min(idx_270, num_points-1)]:.3f}m")
+
+            # Extract key distances from quantized data
+            front_distance = quantized_ranges[0] if len(quantized_ranges) > 0 else 30.0
+            left_distance = quantized_ranges[min(idx_90, num_points-1)] if len(quantized_ranges) > idx_90 else front_distance
+            right_distance = quantized_ranges[min(idx_270, num_points-1)] if len(quantized_ranges) > idx_270 else front_distance
+
+            # Build comprehensive sensor data - ONLY provide full scan, no summary to force analysis
+            sensor_info += f"FULL_{num_points}_LIDAR_SCAN_DATA: [{lidar_360}]"
+            sensor_info += f"\n\nMANDATORY: You MUST analyze EVERY angle in the FULL_{num_points}_LIDAR_SCAN_DATA above. Do NOT use any summary values. Find the angle ranges with maximum clearance."
             
             # DEBUG: Log what data we're sending to VLM
             self.get_logger().info(f"   └── VLM INPUT DATA: Camera + 360° LiDAR scan")
             self.get_logger().info(f"   └── DEBUG SENSOR_INFO: {sensor_info}")
             
-            # Navigation prompt with 360° LiDAR awareness
-            navigation_prompt = f"""You are a robot navigation assistant. Analyze this camera image and 360° LiDAR scan to make an intelligent navigation decision.
+            # Navigation prompt - FORCE ANALYSIS OF RAW SCAN DATA ONLY
+            navigation_prompt = f"""You are a robot navigation assistant. Analyze this camera image and the RAW {num_points}° LiDAR scan data to make an intelligent navigation decision.
 
-⚠️ CRITICAL: Use the complete 360° LiDAR data to make informed decisions. Consider all directions, not just the front.
+🚨 MANDATORY: You MUST analyze the FULL_{num_points}_LIDAR_SCAN_DATA above. DO NOT use any pre-computed summaries. Examine each of the {num_points} angles individually to find optimal navigation paths.
 
 SENSOR DATA: {sensor_info}
 TASK: {prompt}
 
 LIDAR EXPLANATION:
-- 0° = directly ahead, 90° = left side, 180° = behind, 270° = right side
+- 0° = directly ahead (forward)
+- 90° = hard left
+- 180° = directly behind
+- 270° = hard right
+- Angles increase clockwise: 0°→90°→180°→270°→360°(0°)
 - 135°-225° = rear blind spot (obstructed)
-- Values show distance to nearest obstacle in each direction
+- Each angle shows distance to nearest obstacle in meters
+- FULL_{num_points}_LIDAR_SCAN_DATA contains the complete {num_points}-point scan (every {quantization_degrees}°)
+- You must examine the actual angle-by-angle data above
+- Find angle ranges with maximum clearance for navigation
+
+TURNING DIRECTIONS:
+- If best clearance is at angles 315°-45° (forward-right) → turn_right or move_forward
+- If best clearance is at angles 45°-135° (forward-left) → turn_left or move_forward
+- If best clearance is at angles 225°-315° (back-right) → turn_right to face it
+- If best clearance is at angles 135°-225° (back-left) → turn_left to face it
 
 SAFETY RULES:
 - ANY distance < 0.5m = CRITICAL - MUST avoid/stop
@@ -776,14 +888,14 @@ Choose ONE action:
 - strafe_right: For precise sideways movement when right is clear (> 1.5m)
 
 RESPONSE FORMAT (follow exactly):
-1. Analyze situation: "Front: Xm, Left: Ym, Right: Zm - [brief assessment]"
-2. Choose strategy: "Best action is [turn_left/move_forward/etc.] because [reason]"
-3. State confidence: "High confidence because [justification]"
+1. Analyze situation: "Based on 360° scan analysis: [comprehensive assessment using full scan data]"
+2. Choose strategy: "Best action is [turn_left/move_forward/etc.] because [reason based on full scan]"
+3. State confidence: "High confidence because [justification from complete scan analysis]"
 
 EXAMPLES:
-- "Front: 0.8m, Left: 3.5m, Right: 1.2m - Left side much clearer. Best action is turn_left because left offers 3.5m clearance vs front 0.8m" → ACTION: turn_left
-- "Front: 2.8m, Left: 1.8m, Right: 2.2m - Front is clearest path. Best action is move_forward because front offers best clearance" → ACTION: move_forward
-- "Front: 1.1m, Left: 0.7m, Right: 3.8m - Right side dramatically better. Best action is turn_right because right offers 3.8m vs front 1.1m" → ACTION: turn_right
+- "Analyzing FULL_180_LIDAR_SCAN_DATA: Front obstructed at 0.34m, but angles 270°-350° show 1.70m-7.44m clearance. Since best path is at angles 225°-315° (back-right), turn_right to face the clear path" → ACTION: turn_right
+- "Examining complete scan: Angles 350°-10° show 2.8m (forward-right sector), angles 80°-120° show 1.8m (left sector). Best clearance is forward-right at 350°-10°, so move_forward toward the clear path" → ACTION: move_forward
+- "Reviewing 180-point scan: Angles 0°-90° obstructed at 0.8m, but angles 100°-160° show 3.5m clearance. Since best path is at angles 45°-135° (forward-left), turn_left to face the clear path" → ACTION: turn_left
 
 Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the analysis-strategy-confidence format above]"""
             
@@ -872,6 +984,7 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the anal
             # DEBUG: Log the actual VLM response
             self.get_logger().info(f"   └── RAW VLM Response: '{response_text}'")
             self.get_logger().debug(f"   └── Response length: {len(response_text)} characters")
+            self.get_logger().info(f"   └── DEBUG: Full VLM response for parsing: '{response_text}'")
 
             # DEBUG: Check for turn-related keywords in response
             turn_keywords = ['TURN_LEFT', 'TURN_RIGHT', 'turn_left', 'turn_right', 'STRAFE_LEFT', 'STRAFE_RIGHT', 'strafe_left', 'strafe_right']
@@ -898,19 +1011,13 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the anal
             lidar_front_distance = 999.0
             if lidar_data and 'ranges' in lidar_data and len(lidar_data['ranges']) > 0:
                 ranges = lidar_data['ranges']
+                # Use raw data for validation (same as what VLM sees)
+                vlm_ranges = np.array(ranges)
+                vlm_ranges = np.where(np.isfinite(vlm_ranges), vlm_ranges, 30.0)
+                vlm_ranges = np.where(vlm_ranges > 30.0, 30.0, vlm_ranges)
                 # Front is at index 0 in LiDAR scan
-                lidar_front_distance = ranges[0] if len(ranges) > 0 else 999.0
+                lidar_front_distance = vlm_ranges[0] if len(vlm_ranges) > 0 else 999.0
             
-            # Check for dangerous move_forward commands
-            if navigation_result['action'] == 'move_forward' and lidar_front_distance < 1.0:
-                self.get_logger().error(f"   └── VLM MATH ERROR DETECTED: Wants to move forward with LiDAR front distance {lidar_front_distance:.1f}m < 1.0m")
-                self.get_logger().error(f"   └── OVERRIDING VLM decision for safety")
-                self.get_logger().error(f"   └── Overriding dangerous VLM decision with STOP")
-                navigation_result = {
-                    'action': 'stop',
-                    'confidence': 0.9,
-                    'reasoning': f'SAFETY OVERRIDE: VLM wanted move_forward but front distance {lidar_front_distance:.1f}m < 1.0m is too close'
-                }
             
             # Check for overly cautious stop commands when path is clear
             elif navigation_result['action'] == 'stop' and lidar_front_distance > 2.5:
@@ -1056,6 +1163,7 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the anal
             
             # Extract confidence - support both old CONFIDENCE: format and new format
             confidence = 0.5  # Default confidence
+            self.get_logger().info(f"   └── DEBUG: Starting confidence parsing with default: {confidence}")
             if "CONFIDENCE:" in response_upper:
                 try:
                     conf_split = response_upper.split("CONFIDENCE:")
@@ -1063,30 +1171,40 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the anal
                         conf_part = conf_split[1].strip()
                     else:
                         conf_part = ""
-                    # Extract just the number (handle spaces and other text)
+                    self.get_logger().debug(f"   └── PARSING: Confidence part: '{conf_part}'")
+                    # Extract just the number after CONFIDENCE: (handle spaces and other text)
                     import re
-                    conf_match = re.search(r'(\d+\.?\d*)', conf_part)
+                    # Look for number immediately after CONFIDENCE: or at start of conf_part
+                    conf_match = re.search(r'^(\d+\.?\d*)', conf_part.strip()) or re.search(r'(\d+\.?\d*)', conf_part[:20])
                     if conf_match:
                         confidence = float(conf_match.group(1))
                         confidence = max(0.0, min(1.0, confidence))  # Clamp to [0, 1]
-                        self.get_logger().debug(f"   └── PARSING: Extracted confidence: {confidence}")
+                        self.get_logger().info(f"   └── PARSING: Extracted confidence from CONFIDENCE:: {confidence}")
+                    else:
+                        self.get_logger().debug(f"   └── PARSING: No numeric confidence found in: '{conf_part}' - checking full response")
+                        # Fall through to check for confidence level indicators in full response
                 except Exception as e:
                     self.get_logger().debug(f"   └── PARSING: Confidence extraction failed: {e}")
-                    confidence = 0.5
-            else:
-                # Try to extract confidence from new format (HIGH/LOW confidence mentions)
-                if "HIGH CONFIDENCE" in response_upper:
-                    confidence = 0.8
-                    self.get_logger().debug("   └── PARSING: Detected HIGH confidence")
-                elif "LOW CONFIDENCE" in response_upper:
-                    confidence = 0.3
-                    self.get_logger().debug("   └── PARSING: Detected LOW confidence")
-                elif "VERY HIGH" in response_upper or "CERTAIN" in response_upper:
-                    confidence = 0.9
-                    self.get_logger().debug("   └── PARSING: Detected VERY HIGH confidence")
-                elif "VERY LOW" in response_upper or "UNCERTAIN" in response_upper:
-                    confidence = 0.2
-                    self.get_logger().debug("   └── PARSING: Detected VERY LOW confidence")
+                    # Fall through to check for confidence level indicators in full response
+            # Check for confidence level indicators in the full response (both CONFIDENCE: and non-CONFIDENCE: cases)
+            if confidence == 0.5:  # Only check if we haven't found a better confidence yet
+                if "confidence" in response_text.lower():
+                    self.get_logger().info("   └── PARSING: Found 'confidence' in response")
+                    # Look for confidence level indicators
+                    if "high confidence" in response_text.lower():
+                        confidence = 0.8
+                        self.get_logger().info("   └── PARSING: Detected HIGH confidence -> 0.8")
+                    elif "low confidence" in response_text.lower():
+                        confidence = 0.3
+                        self.get_logger().info("   └── PARSING: Detected LOW confidence -> 0.3")
+                    elif "very high" in response_text.lower() or "certain" in response_text.lower():
+                        confidence = 0.9
+                        self.get_logger().info("   └── PARSING: Detected VERY HIGH confidence -> 0.9")
+                    elif "very low" in response_text.lower() or "uncertain" in response_text.lower():
+                        confidence = 0.2
+                        self.get_logger().info("   └── PARSING: Detected VERY LOW confidence -> 0.2")
+                    else:
+                        self.get_logger().info("   └── PARSING: Found confidence but no level indicator, keeping default 0.5")
                 else:
                     # Try to extract numeric confidence from reasoning
                     import re
@@ -1099,26 +1217,57 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the anal
                                 self.get_logger().debug(f"   └── PARSING: Extracted numeric confidence: {confidence}")
                                 break
             
-            # Extract reasoning - support both old REASONING: format and new format
+            # Extract reasoning - support multiple formats
             reasoning = "VLM navigation decision"
             try:
-                if "REASONING:" in response_upper:
-                    reasoning_split = response_text.split("REASONING:")
-                    if len(reasoning_split) > 1:
-                        reasoning = reasoning_split[1].split("|")[0].strip()
+                self.get_logger().info(f"   └── PARSING: Raw response for reasoning extraction: '{response_text[:200]}...'")
+                self.get_logger().info(f"   └── PARSING: response_upper starts with: '{response_upper[:100]}...'")
+
+                # Try different reasoning formats
+                if "ANALYZE SITUATION" in response_upper:
+                    self.get_logger().info("   └── PARSING: Found ANALYZE SITUATION pattern in response_upper")
+                    analyze_split = response_text.split("ANALYZE SITUATION:")
+                    if len(analyze_split) > 1:
+                        reasoning = analyze_split[1].strip()
+                        # Clean up quotes and extract just the assessment part
+                        reasoning = reasoning.strip('"').split('"')[0] if '"' in reasoning else reasoning
+                        self.get_logger().info(f"   └── PARSING: Found ANALYZE SITUATION format: '{reasoning}'")
                 elif "REASON:" in response_upper:
                     reason_split = response_text.split("REASON:")
                     if len(reason_split) > 1:
                         reasoning = reason_split[1].split("|")[0].strip()
+                        self.get_logger().info(f"   └── PARSING: Found REASON format: '{reasoning}'")
+                elif "STATE CONFIDENCE" in response_upper:
+                    # Handle the actual VLM format: "3. State confidence: ..."
+                    confidence_split = response_text.split("STATE CONFIDENCE:")
+                    if len(confidence_split) > 1:
+                        reasoning = confidence_split[1].strip()
+                        # Remove quotes if present
+                        reasoning = reasoning.strip('"')
+                        self.get_logger().info(f"   └── PARSING: Found STATE CONFIDENCE format: '{reasoning}'")
+                elif "CONFIDENCE:" in response_upper:
+                    confidence_split = response_text.split("CONFIDENCE:")
+                    if len(confidence_split) > 1:
+                        reasoning = confidence_split[1].strip()
+                        reasoning = reasoning.strip('"')
+                        self.get_logger().info(f"   └── PARSING: Found CONFIDENCE format: '{reasoning}'")
+                elif "BECAUSE" in response_upper:
+                    because_split = response_text.split("BECAUSE")
+                    if len(because_split) > 1:
+                        reasoning = because_split[1].strip()
+                        reasoning = reasoning.split(".")[0] if "." in reasoning else reasoning
+                        self.get_logger().info(f"   └── PARSING: Found BECAUSE format: '{reasoning}'")
                 else:
-                    # Try to extract reasoning from new format (everything after "because")
-                    if "BECAUSE" in response_upper:
-                        because_split = response_text.split("BECAUSE")
-                        if len(because_split) > 1:
-                            reasoning = because_split[1].strip()
-                            # Clean up the reasoning
-                            reasoning = reasoning.split(".")[0] if "." in reasoning else reasoning
-                            self.get_logger().debug(f"   └── PARSING: Extracted reasoning from new format: '{reasoning}'")
+                    # Try to find any reasoning-like content
+                    self.get_logger().warn(f"   └── PARSING: No standard reasoning format found in response")
+                    # Look for common reasoning keywords
+                    if "because" in response_text.lower():
+                        because_idx = response_text.lower().find("because")
+                        reasoning = response_text[because_idx:].strip()
+                        reasoning = reasoning.split(".")[0] if "." in reasoning else reasoning
+                        self.get_logger().info(f"   └── PARSING: Extracted reasoning from 'because': '{reasoning}'")
+                    else:
+                        self.get_logger().warn(f"   └── PARSING: No reasoning keywords found, using fallback")
             except (IndexError, AttributeError) as e:
                 self.get_logger().warn(f"   └── PARSING: Error extracting reasoning: {e}")
                 reasoning = "VLM navigation decision"
@@ -1126,14 +1275,15 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the anal
             # Check for reasoning-action consistency
             reasoning_lower = reasoning.lower()
             if action == 'move_forward' and ('must stop' in reasoning_lower or 'should stop' in reasoning_lower):
-                self.get_logger().error(f"   └── REASONING-ACTION MISMATCH: Says 'must stop' but ACTION is 'move_forward'")
-                self.get_logger().error(f"   └── Correcting action to match reasoning")
+                self.get_logger().warn(f"   └── REASONING-ACTION MISMATCH: Says 'must stop' but ACTION is 'move_forward'")
+                self.get_logger().warn(f"   └── Correcting action to match reasoning")
                 action = 'stop'
                 confidence = max(0.8, confidence)  # High confidence in safety correction
             elif action == 'stop' and ('must move' in reasoning_lower or 'should move' in reasoning_lower):
                 self.get_logger().warn(f"   └── REASONING-ACTION MISMATCH: Says 'must move' but ACTION is 'stop'")
                 # Keep stop for safety - don't override stop with movement
             
+            self.get_logger().info(f"   └── PARSING: FINAL RESULT - Action: {action}, Confidence: {confidence:.2f}, Reasoning: {reasoning}")
             return {
                 'action': action,
                 'confidence': confidence,
