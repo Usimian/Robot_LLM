@@ -1,7 +1,7 @@
 # ROS2 message for robot commands
 # Robot command message (flows through gateway only)
+# Single robot setup - no robot_id needed
 
-string robot_id                    # Target robot identifier
 string command_type                # "move", "turn", "stop"
 float64 linear_x                   # Forward/backward component (m/s)
 float64 linear_y                   # Left/right strafe component (m/s)

@@ -7,13 +7,9 @@ Common utility functions for the robot GUI
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
-import logging
-from typing import Tuple
+from typing import Tuple, Optional
 
 from .gui_config import GUIConfig
-import logging
-
-logger = logging.getLogger(__name__)
 
 
 class GUIUtils:
@@ -24,28 +20,28 @@ class GUIUtils:
         """Format distance for display"""
         if distance is None or distance < 0:
             return "--"
-        return ".1f"
+        return f"{distance:.1f}"
 
     @staticmethod
     def format_voltage(voltage: float) -> str:
         """Format voltage for display"""
         if voltage is None or voltage <= 0:
             return "--"
-        return ".1f"
+        return f"{voltage:.1f}"
 
     @staticmethod
     def format_temperature(temp: float) -> str:
         """Format temperature for display"""
         if temp is None:
             return "--"
-        return ".1f"
+        return f"{temp:.1f}"
 
     @staticmethod
     def format_cpu_usage(usage: float) -> str:
         """Format CPU usage for display"""
         if usage is None or usage < 0:
             return "--"
-        return ".1f"
+        return f"{usage:.1f}"
 
     @staticmethod
     def get_distance_color(distance: float) -> str:
@@ -160,10 +156,10 @@ class GUIUtils:
         return f"[{timestamp}] {level}: {message}"
 
     @staticmethod
-    def safe_callback(callback, *args, **kwargs):
+    def safe_callback(callback, logger, *args, **kwargs):
         """Safely execute callback with error handling"""
         try:
             return callback(*args, **kwargs)
         except Exception as e:
-            logger.error( f"Callback error: {e}")
+            logger.error(f"Callback error: {e}")
             return None

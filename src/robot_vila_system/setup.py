@@ -30,7 +30,6 @@ setup(
     maintainer_email='robot@example.com',
     description='ROS2 Local VLM Navigation Robot System',
     license='MIT',
-#    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'robot_gui_node.py = robot_vila_system.robot_gui_node:main',

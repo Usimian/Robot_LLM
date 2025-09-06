@@ -16,12 +16,7 @@ from robot_vila_system.gui_config import GUIConfig
 def generate_launch_description():
     """Generate launch description for Local VLM Navigation client system with GUI"""
     
-    # Launch arguments
-    robot_id_arg = DeclareLaunchArgument(
-        'robot_id',
-        default_value='yahboomcar_x3_01',
-        description='Robot ID to connect to'
-    )
+    # Launch arguments - simplified for single robot setup
     
     gui_enabled_arg = DeclareLaunchArgument(
         'gui',
@@ -55,7 +50,6 @@ def generate_launch_description():
     )
     
     # Get launch configurations
-    robot_id = LaunchConfiguration('robot_id')
     gui_enabled = LaunchConfiguration('gui')
 
     # Local VLM Navigation configurations
@@ -73,7 +67,7 @@ def generate_launch_description():
         name='robot_gui',
         namespace='client',
         parameters=[{
-            'robot_id': robot_id,
+            # Single robot setup - no robot_id needed
         }],
         output='screen',
         emulate_tty=True,
@@ -96,7 +90,6 @@ def generate_launch_description():
     
     return LaunchDescription([
         # Launch arguments
-        robot_id_arg,
         gui_enabled_arg,
         vlm_model_name_arg,
         vlm_node_name_arg,
@@ -105,7 +98,7 @@ def generate_launch_description():
 
         # Status messages
         LogInfo(msg='🚀 Starting Local VLM Navigation Client System...'),
-        LogInfo(msg=['Target Robot ID: ', robot_id]),
+        LogInfo(msg='Target: Single Robot Configuration'),
         LogInfo(msg=['GUI Enabled: ', gui_enabled]),
         LogInfo(msg=['Local VLM Enabled: ', vlm_enabled]),
         LogInfo(msg=['VLM Model: ', vlm_model_name]),

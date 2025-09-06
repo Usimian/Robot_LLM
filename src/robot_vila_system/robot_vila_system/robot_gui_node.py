@@ -7,13 +7,11 @@ Replaces HTTP/WebSocket communication with ROS2 messaging
 
 import tkinter as tk
 from tkinter import ttk
-import json
 import threading
 import time
 from typing import Dict
 import queue
 from PIL import Image
-import numpy as np
 
 # ROS2 imports
 import rclpy
@@ -36,21 +34,14 @@ from .gui_components import (
     ActivityLogPanel
 )
 
-# Import simple logger
-
-
 
 class RobotGUIROS2Node(Node):
     """ROS2 node for the robot GUI"""
     
     def __init__(self, gui_callback):
         super().__init__('robot_gui_internal')  # Use different name to avoid conflict with launch file
-        
 
-        
         self.gui_callback = gui_callback
-        self.robot_id = "yahboomcar_x3_01"
-        self.last_vila_update = None
         self.latest_imu_data = None
         self.current_camera_image = None
         self.current_sensor_data = None
@@ -77,7 +68,6 @@ class RobotGUIROS2Node(Node):
         
         # Setup ROS2 interfaces
         self._setup_subscribers()
-        self._setup_publishers()
         self._setup_service_clients()
         
         self.get_logger().info("🖥️ Robot GUI ROS2 node initialized")
@@ -145,10 +135,6 @@ class RobotGUIROS2Node(Node):
             self.reliable_qos
         )
     
-    def _setup_publishers(self):
-        """Setup ROS2 publishers"""
-        pass  # Add publishers if needed
-    
     def _setup_service_clients(self):
         """Setup ROS2 service clients"""
         # Robot command service client
@@ -194,7 +180,6 @@ class RobotGUIROS2Node(Node):
         """Handle navigation commands"""
         self.gui_callback('navigation_commands', msg.data)
     
-    # Safety status callback removed - handled locally in GUI
     
     def _command_ack_callback(self, msg: RobotCommand):
         """Handle command acknowledgments"""
@@ -228,7 +213,6 @@ class RobotGUIROS2Node(Node):
 
         # Create RobotCommand message for the request
         command_msg = RobotCommand()
-        command_msg.robot_id = self.robot_id
         command_msg.command_type = command_type
 
         # Set command parameters based on type
@@ -285,11 +269,6 @@ class RobotGUIROS2:
     """Main GUI class using component-based architecture"""
     
     def __init__(self, root, logger=None):
-        # Use provided logger or create a simple one
-        if logger is None:
-            import logging
-            logger = logging.getLogger('RobotGUI')
-            logger.setLevel(logging.INFO)
         self.logger = logger
         self.logger.debug(f"🔧 DEBUG: RobotGUIROS2.__init__ entered")
         self.root = root
@@ -340,19 +319,17 @@ class RobotGUIROS2:
         """Initialize GUI state variables"""
         self.logger.debug( f"🔧 DEBUG: Initializing GUI state variables")
 
-        self.robot_id = "yahboomcar_x3_01"
+        # Single robot setup - no robot_id variable needed
         self.robot_data = {}
         self.sensor_data = {}
         self.current_image = None
-        self.loaded_image = None
         self.movement_enabled = True
         self._cleanup_requested = False
 
-        self.camera_source = GUIConfig.DEFAULT_CAMERA_SOURCE
         
         # Auto VLM analysis
-        self.auto_cosmos_enabled = False
-        self.auto_cosmos_timer = None
+        self.auto_vlm_enabled = False
+        self.auto_vlm_timer = None
         self.auto_execute_enabled = False  # Default: do not auto-execute for safety
 
         # Threading and queues
@@ -365,23 +342,23 @@ class RobotGUIROS2:
         try:
             # Create component instances with proper callbacks
             self.logger.debug( f"🔧 Creating SystemStatusPanel...")
-            self.system_panel = SystemStatusPanel(self.root, self._update_system_status)
+            self.system_panel = SystemStatusPanel(self.root, self._update_system_status, self.logger)
             self.logger.debug( f"✅ SystemStatusPanel created")
 
             self.logger.debug( f"🔧 Creating MovementControlPanel...")
-            self.movement_panel = MovementControlPanel(self.root, self._handle_movement_command)
+            self.movement_panel = MovementControlPanel(self.root, self._handle_movement_command, self.logger)
             self.logger.debug( f"✅ MovementControlPanel created")
 
             self.logger.debug( f"🔧 Creating CameraPanel...")
-            self.camera_panel = CameraPanel(self.root, self._handle_camera_update)
+            self.camera_panel = CameraPanel(self.root, self._handle_camera_update, self.logger)
             self.logger.debug( f"✅ CameraPanel created")
 
             self.logger.debug( f"🔧 Creating VLMAnalysisPanel...")
-            self.vlm_panel = VLMAnalysisPanel(self.root, self._handle_vlm_analysis, self.log_message)
+            self.vlm_panel = VLMAnalysisPanel(self.root, self._handle_vlm_analysis, self.log_message, self.logger)
             self.logger.debug( f"✅ VLMAnalysisPanel created")
 
             self.logger.debug( f"🔧 Creating ActivityLogPanel...")
-            self.log_panel = ActivityLogPanel(self.root)
+            self.log_panel = ActivityLogPanel(self.root, self.logger)
             self.logger.debug( f"✅ ActivityLogPanel created")
 
         except Exception as e:
@@ -564,60 +541,10 @@ class RobotGUIROS2:
 
     def _handle_camera_update(self, message_type: str, data):
         """Handle camera update from camera panel"""
-        if message_type == 'camera_source_changed':
-            self.camera_source = data
-            self._on_camera_source_change()
-            self.log_message(f"📷 Camera source switched to: {data}")
-        elif message_type == 'image_loaded':
-            self._load_image_file_from_path(data)
-            # Only switch to loaded source if user hasn't explicitly selected robot source
-            current_source = self.camera_source
-            if current_source != "robot":
-                self.camera_source = "loaded"
-                if hasattr(self, 'camera_panel'):
-                    self.camera_panel.set_source("loaded")
-                self.log_message(f"📷 Auto-switched to loaded image source")
-            else:
-                self.log_message(f"📷 Image loaded but keeping robot source as selected")
-        else:
-            self.logger.warning( f"Unknown camera update type: {message_type}")
+        # No camera source changes to handle - only robot camera available
+        self.logger.warning( f"Unknown camera update type: {message_type}")
 
-    def _load_image_file_from_path(self, file_path: str):
-        """Load image from file path"""
-        try:
-            from PIL import Image
-            self.loaded_image = Image.open(file_path)
-            filename = file_path.split('/')[-1] if '/' in file_path else file_path
-            self.log_message(f"📁 Image loaded: {filename}")
-            
-            # Only update camera panel display if loaded source is currently selected
-            if hasattr(self, 'camera_panel') and self.camera_source == "loaded":
-                self.camera_panel.update_camera_image(self.loaded_image)
-                
-        except Exception as e:
-            self.log_message(f"❌ Failed to load image: {e}")
-            self.loaded_image = None
 
-    def _on_camera_source_change(self):
-        """Handle camera source change"""
-        if self.camera_source == "loaded":
-            if hasattr(self, 'loaded_image') and self.loaded_image:
-                # Show loaded image immediately
-                if hasattr(self, 'camera_panel'):
-                    self.camera_panel.update_camera_image(self.loaded_image)
-                self.log_message(f"📷 Displaying loaded image")
-            else:
-                # No loaded image available, show message
-                if hasattr(self, 'camera_panel') and hasattr(self.camera_panel, 'camera_label'):
-                    self.camera_panel.camera_label.config(text="📷 No image loaded\nClick 'Load Image' to select one", image="")
-                self.log_message(f"📷 Loaded image source selected but no image available")
-        elif self.camera_source == "robot":
-            # Clear display and wait for next robot image
-            if hasattr(self, 'camera_panel') and hasattr(self.camera_panel, 'camera_label'):
-                self.camera_panel.camera_label.config(text="📷 Waiting for robot camera feed...", image="")
-            self.log_message(f"📷 Robot camera source selected")
-        else:
-            self.log_message(f"📷 Unknown camera source: {self.camera_source}")
 
 
 
@@ -674,8 +601,8 @@ class RobotGUIROS2:
         # Store the current camera image for potential use
         self.current_image = data
         
-        # Only update camera display if source is set to robot
-        if hasattr(self, 'camera_panel') and self.camera_source == "robot":
+        # Always update camera display with robot camera feed
+        if hasattr(self, 'camera_panel'):
             # Convert ROS image to PIL for display
             try:
                 # Use the same conversion logic as before
@@ -694,8 +621,7 @@ class RobotGUIROS2:
                 self.camera_panel.update_camera_image(pil_image)
             except Exception as e:
                 self.logger.error( f"Error converting camera image: {e}")
-                if hasattr(self, 'camera_panel') and hasattr(self.camera_panel, 'camera_label'):
-                    self.camera_panel.camera_label.config(text=f"❌ Camera error: {str(e)}", image="")
+                # Camera error will be handled by the canvas message system
 
     def _handle_navigation_commands(self, data):
         """Handle navigation commands"""
@@ -805,7 +731,7 @@ class RobotGUIROS2:
             self.logger.info( f"🧹 Simple cleanup starting...")
             
             # Stop auto analysis timer
-            self._stop_auto_cosmos_timer()
+            self._stop_auto_vlm_timer()
             
             # Don't wait for ROS thread - it will stop on its own
             # Just destroy the node quickly
@@ -835,12 +761,10 @@ class RobotGUIROS2:
 
     def _handle_vlm_analysis(self, event_type: str, data):
         """Handle analysis events"""
-        if event_type == 'load_image':
-            self._load_image_file_for_cosmos(data)
-        elif event_type == 'request_analysis':
-            self._request_cosmos_analysis(data)
+        if event_type == 'request_analysis':
+            self._request_vlm_analysis(data)
         elif event_type == 'auto_analysis_toggle':
-            self._toggle_auto_cosmos_analysis(data)
+            self._toggle_auto_vlm_analysis(data)
         elif event_type == 'auto_execute_toggle':
             self._toggle_auto_execute(data)
         else:
@@ -854,23 +778,8 @@ class RobotGUIROS2:
         else:
             self.log_message("🤖 Auto execute VLM recommendations disabled")
 
-    def _load_image_file_for_cosmos(self, file_path: str):
-        """Load image from file path for VLM analysis"""
-        try:
-            from PIL import Image
-            self.loaded_image = Image.open(file_path)
-            filename = file_path.split('/')[-1] if '/' in file_path else file_path
-            self.log_message(f"📁 Image loaded for VLM analysis: {filename}")
 
-            # Update camera panel display only if loaded source is selected
-            if hasattr(self, 'camera_panel') and self.camera_source == "loaded":
-                self.camera_panel.update_camera_image(self.loaded_image)
-
-        except Exception as e:
-            self.log_message(f"❌ Failed to load image for VLM analysis: {e}")
-            self.loaded_image = None
-
-    def _request_cosmos_analysis(self, prompt: str):
+    def _request_vlm_analysis(self, prompt: str):
         """Request analysis"""
         try:
             # Use the ROS2 node to send real analysis request to VLM service
@@ -890,7 +799,6 @@ class RobotGUIROS2:
                 from robot_msgs.srv import ExecuteCommand
                 
                 command_msg = RobotCommand()
-                command_msg.robot_id = self.robot_id
                 command_msg.command_type = "vlm_analysis"
 
                 request = ExecuteCommand.Request()
@@ -900,7 +808,7 @@ class RobotGUIROS2:
                 future = self.ros_node.vlm_client.call_async(request)
                 
                 # Handle response in callback
-                def handle_cosmos_response(future):
+                def handle_vlm_response(future):
                     try:
                         response = future.result()
                         if response.success:
@@ -916,7 +824,7 @@ class RobotGUIROS2:
                                 action = navigation_commands.get('action', 'stop')
                                 confidence = navigation_commands.get('confidence', 0.0)
 
-                                cosmos_result = {
+                                vlm_result = {
                                     'success': True,
                                     'analysis_result': analysis_text,
                                     'reasoning': reasoning,
@@ -928,7 +836,7 @@ class RobotGUIROS2:
                                 
                                 # Update the VLM panel with real results
                                 if hasattr(self, 'vlm_panel'):
-                                    self.vlm_panel.update_analysis_result(cosmos_result)
+                                    self.vlm_panel.update_analysis_result(vlm_result)
                                 
                                 # EXECUTE THE RECOMMENDED ACTION (if auto-execute enabled)
                                 if self.auto_execute_enabled:
@@ -962,7 +870,7 @@ class RobotGUIROS2:
                                 elif "turn_right" in analysis_text:
                                     action = "turn_right"
                                 
-                                cosmos_result = {
+                                vlm_result = {
                                     'success': True,
                                     'analysis_result': analysis_text,
                                     'navigation_commands': {'action': action, 'confidence': 0.5},
@@ -971,11 +879,11 @@ class RobotGUIROS2:
                                 }
                                 
                                 if hasattr(self, 'vlm_panel'):
-                                    self.vlm_panel.update_analysis_result(cosmos_result)
+                                    self.vlm_panel.update_analysis_result(vlm_result)
                                 
                             except Exception as e:
                                 self.log_message(f"❌ Error processing VLM response: {e}")
-                                cosmos_result = {
+                                vlm_result = {
                                     'success': False,
                                     'analysis_result': f"Error: {str(e)}",
                                     'navigation_commands': {'action': 'stop', 'confidence': 0.0},
@@ -989,62 +897,62 @@ class RobotGUIROS2:
                         self.log_message(f"❌ VLM service response error: {e}")
                 
                 # Add callback for when service call completes
-                future.add_done_callback(handle_cosmos_response)
+                future.add_done_callback(handle_vlm_response)
 
         except Exception as e:
             self.log_message(f"❌ VLM analysis error: {e}")
 
-    def _toggle_auto_cosmos_analysis(self, enabled: bool):
+    def _toggle_auto_vlm_analysis(self, enabled: bool):
         """Toggle auto VLM analysis on/off"""
-        self.auto_cosmos_enabled = enabled
+        self.auto_vlm_enabled = enabled
         
         if enabled:
             self.log_message("🔄 Auto VLM analysis enabled")
-            self._start_auto_cosmos_timer()
+            self._start_auto_vlm_timer()
         else:
             self.log_message("🔄 Auto VLM analysis disabled")
-            self._stop_auto_cosmos_timer()
+            self._stop_auto_vlm_timer()
     
-    def _start_auto_cosmos_timer(self):
+    def _start_auto_vlm_timer(self):
         """Start the auto VLM analysis timer"""
-        if self.auto_cosmos_timer:
-            self.root.after_cancel(self.auto_cosmos_timer)
+        if self.auto_vlm_timer:
+            self.root.after_cancel(self.auto_vlm_timer)
         
         # Start timer for automatic analysis using configurable interval
-        self._schedule_auto_cosmos_analysis()
+        self._schedule_auto_vlm_analysis()
     
-    def _stop_auto_cosmos_timer(self):
+    def _stop_auto_vlm_timer(self):
         """Stop the auto VLM analysis timer"""
-        if self.auto_cosmos_timer:
-            self.root.after_cancel(self.auto_cosmos_timer)
-            self.auto_cosmos_timer = None
+        if self.auto_vlm_timer:
+            self.root.after_cancel(self.auto_vlm_timer)
+            self.auto_vlm_timer = None
     
-    def _schedule_auto_cosmos_analysis(self):
+    def _schedule_auto_vlm_analysis(self):
         """Schedule the next auto VLM analysis"""
-        if self.auto_cosmos_enabled:
+        if self.auto_vlm_enabled:
             # Perform analysis
-            self._auto_cosmos_analysis()
+            self._auto_vlm_analysis()
             # Schedule next analysis using configurable interval
             # Use VLM_AUTO_INTERVAL if available
             interval_seconds = getattr(GUIConfig, 'VLM_AUTO_INTERVAL', getattr(GUIConfig, 'VLM_AUTO_INTERVAL', 1.0))
             interval_ms = int(interval_seconds * 1000)  # Convert seconds to milliseconds
-            self.auto_cosmos_timer = self.root.after(interval_ms, self._schedule_auto_cosmos_analysis)
+            self.auto_vlm_timer = self.root.after(interval_ms, self._schedule_auto_vlm_analysis)
     
-    def _auto_cosmos_analysis(self):
+    def _auto_vlm_analysis(self):
         """Perform automatic VLM analysis"""
-        if self.auto_cosmos_enabled:
+        if self.auto_vlm_enabled:
             # Use default prompt for auto analysis
             default_prompt = "Analyze the current camera view for navigation."
-            self._request_cosmos_analysis(default_prompt)
+            self._request_vlm_analysis(default_prompt)
     
     def _on_window_close(self):
         """Handle window close event (X button clicked)"""
         self.logger.info(f"🚪 Window close requested")
         try:
             # Stop auto-analysis timer
-            if hasattr(self, 'auto_cosmos_timer') and self.auto_cosmos_timer:
-                self.root.after_cancel(self.auto_cosmos_timer)
-                self.auto_cosmos_timer = None
+            if hasattr(self, 'auto_vlm_timer') and self.auto_vlm_timer:
+                self.root.after_cancel(self.auto_vlm_timer)
+                self.auto_vlm_timer = None
 
             # Stop ROS2 spinning thread
             if hasattr(self, 'ros_spin_thread') and self.ros_spin_thread and self.ros_spin_thread.is_alive():

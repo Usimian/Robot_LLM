@@ -1,6 +1,6 @@
 # ROS2 message for robot sensor data
+# Single robot setup - no robot_id needed
 
-string robot_id
 float64 battery_voltage
 float64 cpu_temp
 float64 cpu_usage

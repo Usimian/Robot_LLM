@@ -1,18 +1,18 @@
 ---
-description: 
+description: A standalone client for a mecanum wheeled robot using an LLM + sensors for navigation.
 globs: 
 alwaysApply: true
 ---
 The application is a client/server system.
   The client runs on an AMD64 ubuntu 22.04 PC in a python/tkinter/ROS2 framework (this workspace)
   The robot runs on a jetson orin nano connected via ssh.
-  The robot has an RGB camera, a depth camera, an IMU, a lidar and wheel odometry.
+  The robot has an RGB camera, a depth camera, an IMU, a lidar and wheel odometry with mecanum wheels.
   All messaging should be done through ROS2 nodes and topics.
 Always check the terminal output for errors after running a terminal command.
-Always open the terminal output after running a terminal command.
 There is only one hardware robot at 192.168.1.166.
 All communications with the robot are requested by this client.
 Build ROS2 packages without --symlink-install
 Do not create simulated data.
 Do not create mock data.
 Do not create fallbacks.
+Answers need to be succint and address the issue without generating unrequested extraneous code.

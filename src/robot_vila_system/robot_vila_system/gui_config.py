@@ -69,7 +69,7 @@ class GUIConfig:
     CONNECTING_TEXT = "Connecting..."
 
     # Camera settings
-    CAMERA_SOURCES = ["robot", "loaded"]
+    CAMERA_SOURCES = ["robot"]
     DEFAULT_CAMERA_SOURCE = "robot"
 
     # Log settings

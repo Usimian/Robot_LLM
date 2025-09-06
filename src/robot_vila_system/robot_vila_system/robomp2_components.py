@@ -10,7 +10,6 @@ Author: Robot LLM System with RoboMP2 Integration
 
 import time
 import pickle
-import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from collections import deque

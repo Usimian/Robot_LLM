@@ -13,11 +13,10 @@ Author: Robot LLM System with RoboMP2 Integration
 import json
 import threading
 import time
-import pickle
 import hashlib
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
-from dataclasses import dataclass, asdict
+from typing import Dict, Any, Optional, List
+from dataclasses import dataclass
 from collections import deque
 import numpy as np
 
@@ -37,7 +36,6 @@ from PIL import Image
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor
 import transformers
 transformers.logging.set_verbosity_error()  # Suppress generation warnings
-import cv2
 
 # Import RoboMP2 components
 from .robomp2_components import GoalConditionedMultimodalPerceptor, RetrievalAugmentedMultimodalPlanner
@@ -527,7 +525,7 @@ class RoboMP2NavigationNode(Node):
                 prompt = "Analyze the current scene for robot navigation"
             
                 # Run VLM inference with RAW LiDAR data (not processed/filtered)
-                navigation_result = self._run_vlm_navigation_inference(current_image, prompt, sensor_data, lidar_data, raw_lidar_msg=None)
+                navigation_result = self._run_vlm_navigation_inference(current_image, prompt, sensor_data, lidar_data)
             
                 # Format response with enhanced reasoning display
                 analysis_result = {
@@ -556,7 +554,6 @@ class RoboMP2NavigationNode(Node):
             
                 # Publish analysis results
                 command_msg = RobotCommand()
-                command_msg.robot_id = request.command.robot_id
                 command_msg.command_type = "vlm_analysis"
 
                 self.analysis_publisher.publish(command_msg)
@@ -1304,8 +1301,8 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the anal
     def _goal_service_callback(self, request, response):
         """Handle RoboMP2 goal setting requests"""
         try:
-            # Parse goal from request - use robot_id as fallback
-            goal_data = request.command.robot_id  # Use robot_id as goal data
+            # Parse goal from request - single robot setup
+            goal_data = "navigation|Navigate safely"  # Default goal for single robot
             
             if '|' in goal_data:
                 goal_parts = goal_data.split('|')
@@ -1353,8 +1350,8 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the anal
                 response.result_message = "RAMP not initialized"
                 return response
             
-            # Parse policy from request - use robot_id as fallback 
-            policy_data = request.command.robot_id  # Use robot_id as policy data
+            # Parse policy from request - single robot setup
+            policy_data = f"policy_{int(time.time())}|unknown|navigation|stop|Default policy"  # Default policy data
             
             if '|' in policy_data:
                 parts = policy_data.split('|')
@@ -1405,11 +1402,11 @@ def main(args=None):
         pass
     except Exception as e:
         if 'node' in locals():
-            node.logger.error(f"Node error: {e}")
+            node.get_logger().error(f"Node error: {e}")
     finally:
         if 'node' in locals():
-                node.destroy_node()
-                rclpy.shutdown()
+            node.destroy_node()
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

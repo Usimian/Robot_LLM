@@ -6,25 +6,22 @@ Separated GUI components for better maintainability
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext, filedialog
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, Optional
 from PIL import Image, ImageTk
-import logging
 import math
 import time
 
 from .gui_config import GUIConfig
 from .gui_utils import GUIUtils
-import logging
-
-logger = logging.getLogger('GUIComponents')
 
 
 class SystemStatusPanel:
     """Handles system status display panel"""
 
-    def __init__(self, parent, update_callback: Callable):
+    def __init__(self, parent, update_callback: Callable, logger=None):
         self.parent = parent
         self.update_callback = update_callback
+        self.logger = logger
         self.status_labels = {}
 
     def create(self, parent):
@@ -104,7 +101,7 @@ class SystemStatusPanel:
 
 
         except Exception as e:
-            logger.error( f"Error updating hardware status: {e}")
+            self.logger.error(f"Error updating hardware status: {e}")
 
     def update_robot_status(self, status_data: Dict[str, Any]):
         """Update robot status display"""
@@ -117,11 +114,6 @@ class SystemStatusPanel:
             text = "Enabled" if status_data['movement_enabled'] else "Disabled"
             self.status_labels['movement'].config(text=text, foreground=color)
 
-    def update_sensor_data(self, sensor_data: Dict[str, Any]):
-        """Update sensor data display"""
-        # This method will be expanded to handle all sensor data updates
-        # that were previously done by the old monolithic methods
-        pass
 
     def update_model_status(self, status_data: Dict[str, Any]):
         """Update VLM Model status display"""
@@ -149,16 +141,17 @@ class SystemStatusPanel:
             self.status_labels['model'].config(text=status_text, foreground=color)
 
         except Exception as e:
-            logger.error( f"Error updating Model status: {e}")
+            self.logger.error(f"Error updating Model status: {e}")
             self.status_labels['model'].config(text="Error", foreground=GUIConfig.COLORS['error'])
 
 
 class MovementControlPanel:
     """Handles movement control panel"""
 
-    def __init__(self, parent, command_callback: Callable):
+    def __init__(self, parent, command_callback: Callable, logger=None):
         self.parent = parent
         self.command_callback = command_callback
+        self.logger = logger
         self.buttons = {}
 
     def create(self, parent):
@@ -274,19 +267,26 @@ class MovementControlPanel:
         
         # Data change tracking to prevent unnecessary redraws
         self.last_lidar_hash = None
+        # Pre-computed values for performance
+        self._lidar_angles_rad = None
+        self._lidar_angles_deg = None
+        self._canvas_width = 180
+        self._canvas_height = 120
+        self._center_x = self._canvas_width // 2
+        self._center_y = self._canvas_height - (self._canvas_height // 4)
         
         # Initialize LiDAR data storage
         self.max_range = GUIConfig.LIDAR_MAX_RANGE
         self.lidar_ranges = [self.max_range] * 360  # Default to max range
         self.raw_lidar_ranges = None  # Will store actual scan data
-        
+
+        # Rate limiting for LiDAR updates
+        self._last_lidar_update_time = 0
+        self._min_lidar_update_interval = 0.1  # 10 FPS max for LiDAR display
+
         # Draw initial arc ONCE
         self._draw_lidar_arc()
         
-        # NO periodic updates - only update when data changes!
-
-
-
         # LiDAR range selection dropdown
         range_frame = ttk.Frame(self.imu_frame)
         range_frame.pack(fill=tk.X, pady=(5, 0))
@@ -408,7 +408,7 @@ class MovementControlPanel:
             if 'accel_z' in sensor_data:
                 self.imu_labels['Z'].config(text=f"{sensor_data['accel_z']:.2f} m/s²", foreground=GUIConfig.COLORS['success'])
         except Exception as e:
-            logger.error( f"Error updating IMU data: {e}")
+            self.logger.error(f"Error updating IMU data: {e}")
             # Set error states for IMU labels
             for axis in ['X', 'Y', 'Z']:
                 if axis in self.imu_labels:
@@ -421,24 +421,32 @@ class MovementControlPanel:
             if 'ranges' in lidar_data and lidar_data['ranges']:
                 # Store the raw scan data - we'll interpret it correctly in _draw_lidar_arc
                 self.raw_lidar_ranges = lidar_data['ranges']
-                # Debug: Log some sample data points with correct indexing
-                if len(self.raw_lidar_ranges) >= 100:
+
+                # Rate limiting to prevent excessive updates
+                current_time = time.time()
+                if current_time - self._last_lidar_update_time < self._min_lidar_update_interval:
+                    return  # Skip this update to maintain smooth performance
+                self._last_lidar_update_time = current_time
+
+                # Debug: Log some sample data points with correct indexing (only if debug logging enabled)
+                if self.logger and len(self.raw_lidar_ranges) >= 100:
                     mid_idx = len(self.raw_lidar_ranges) // 2
                     quarter_idx = len(self.raw_lidar_ranges) // 4
                     three_quarter_idx = 3 * len(self.raw_lidar_ranges) // 4
-                    logger.debug( f"LiDAR scan received: {len(self.raw_lidar_ranges)} points, "
+                    self.logger.debug(f"LiDAR scan received: {len(self.raw_lidar_ranges)} points, "
                                f"Back(idx=0)={self.raw_lidar_ranges[0]:.2f}m, "
                                f"Front(idx={mid_idx})={self.raw_lidar_ranges[mid_idx]:.2f}m, "
                                f"Left(idx={quarter_idx})={self.raw_lidar_ranges[quarter_idx]:.2f}m, "
                                f"Right(idx={three_quarter_idx})={self.raw_lidar_ranges[three_quarter_idx]:.2f}m")
-                # IMMEDIATELY update display when new data arrives (no timer!)
+
+                # Update display with rate limiting
                 self._draw_lidar_arc()
             else:
                 # No LiDAR data available
-                logging.getLogger('GUIComponents').debug("No LiDAR ranges data available")
+                self.logger.debug("No LiDAR ranges data available")
                 self.raw_lidar_ranges = None
         except Exception as e:
-            logger.error( f"Error updating LiDAR data: {e}")
+            self.logger.error(f"Error updating LiDAR data: {e}")
             self.raw_lidar_ranges = None
     
     def _draw_lidar_arc(self, error=False):
@@ -446,8 +454,9 @@ class MovementControlPanel:
         try:
             # Only redraw if data has actually changed
             if hasattr(self, 'raw_lidar_ranges') and self.raw_lidar_ranges:
-                # Create a simple hash of the data to detect changes
-                data_hash = hash(str(self.raw_lidar_ranges[:100]))  # Sample first 100 points for speed
+                # Efficient hash calculation using tuple of rounded values
+                sample_data = tuple(round(x, 2) for x in self.raw_lidar_ranges[::10])  # Sample every 10th point, round to 2 decimals
+                data_hash = hash(sample_data)
                 if data_hash == self.last_lidar_hash:
                     return  # No change, don't redraw
                 self.last_lidar_hash = data_hash
@@ -455,58 +464,68 @@ class MovementControlPanel:
             # Clear canvas only when we need to redraw
             self.lidar_canvas.delete("all")
             
-            # Canvas dimensions
-            width = 180
-            height = 120
-            center_x = width // 2
-            center_y = height - (height // 4)  # 1/4 from bottom = 3/4 down from top
-            
+            # Use pre-computed canvas dimensions
+            center_x = self._center_x
+            center_y = self._center_y
+
             # Show error state
             if error:
-                self.lidar_canvas.create_text(center_x, height//2, text="LiDAR Error", fill="red", font=('Arial', 10))
+                self.lidar_canvas.create_text(center_x, self._canvas_height//2, text="LiDAR Error", fill="red", font=('Arial', 10))
                 return
-            
-            # Draw LiDAR data points - simple and direct
+
+            # Draw LiDAR data points - optimized approach
             if hasattr(self, 'raw_lidar_ranges') and self.raw_lidar_ranges:
                 num_points = len(self.raw_lidar_ranges)
-                
+
+                # Pre-compute angles if not already done or if scan size changed
+                if (self._lidar_angles_rad is None or
+                    len(self._lidar_angles_rad) != num_points):
+                    self._lidar_angles_rad = []
+                    self._lidar_angles_deg = []
+                    for i in range(num_points):
+                        scan_angle_rad = -math.pi + (i / (num_points - 1)) * (2 * math.pi)
+                        self._lidar_angles_rad.append(scan_angle_rad)
+                        self._lidar_angles_deg.append(math.degrees(scan_angle_rad))
+
+                # Batch draw points for better performance
+                points_to_draw = []
+
                 for i in range(0, num_points, 5):  # Sample every 5th point for performance
                     distance = self.raw_lidar_ranges[i]
-                    
+
                     # Handle invalid/infinite distances
                     if not math.isfinite(distance) or distance <= 0 or distance > self.max_range:
                         continue
-                    
-                    # Convert scan index to angle in radians
-                    scan_angle_rad = -math.pi + (i / (num_points - 1)) * (2 * math.pi)
-                    scan_angle_deg = math.degrees(scan_angle_rad)
-                    
+
+                    # Use pre-computed angles
+                    scan_angle_rad = self._lidar_angles_rad[i]
+                    scan_angle_deg = self._lidar_angles_deg[i]
+
                     # Skip rear 90° blind spot
                     if -45 <= scan_angle_deg <= 45:
                         continue
-                    
-                    # Calculate point position - use full rectangular canvas space
-                    # Scale distance to canvas dimensions independently for x and y
+
+                    # Calculate point position - optimized calculations
                     scaled_distance = distance / self.max_range
-
-                    # Calculate maximum displacements in each direction (rectangular boundaries)
-                    max_dx = center_x  # Can go ±90 pixels in x direction
-                    max_dy = center_y  # Can go ±60 pixels in y direction
-
-                    # Convert to Cartesian coordinates with rectangular scaling
                     screen_angle_rad = scan_angle_rad - math.pi/2
-                    dx = scaled_distance * max_dx * math.cos(screen_angle_rad)
-                    dy = scaled_distance * max_dy * math.sin(screen_angle_rad)
+
+                    # Use pre-computed canvas boundaries
+                    dx = scaled_distance * center_x * math.cos(screen_angle_rad)
+                    dy = scaled_distance * center_y * math.sin(screen_angle_rad)
 
                     # Map to screen coordinates
                     point_x = center_x + dx
                     point_y = center_y - dy
-                    
-                    # Draw single point - simple rectangle
-                    self.lidar_canvas.create_rectangle(point_x-1, point_y-1, point_x+1, point_y+1, 
+
+                    # Collect points for batch drawing
+                    points_to_draw.append((point_x, point_y))
+
+                # Batch draw all points at once for better performance
+                for point_x, point_y in points_to_draw:
+                    self.lidar_canvas.create_rectangle(point_x-1, point_y-1, point_x+1, point_y+1,
                                                      fill="red", outline="red", width=0)
             
-            # Draw robot as upward-pointing triangle (front = up) at center
+            # Draw robot as upward-pointing triangle (front = up) at center - using pre-computed values
             triangle_size = 6
             triangle_points = [
                 center_x, center_y - triangle_size,      # Top point (front)
@@ -516,7 +535,7 @@ class MovementControlPanel:
             self.lidar_canvas.create_polygon(triangle_points, fill="cyan", outline="blue", width=1)
             
         except Exception as e:
-            logger.error( f"Error drawing LiDAR arc: {e}")
+            self.logger.error(f"Error drawing LiDAR arc: {e}")
             self.lidar_canvas.delete("all")
             self.lidar_canvas.create_text(90, 60, text="LiDAR Error", fill="red", font=('Arial', 10))
     
@@ -524,15 +543,13 @@ class MovementControlPanel:
 class CameraPanel:
     """Handles camera display panel"""
 
-    def __init__(self, parent, image_callback: Callable):
+    def __init__(self, parent, image_callback: Callable, logger=None):
         self.parent = parent
         self.image_callback = image_callback
+        self.logger = logger
         self.camera_canvas = None
-        self.source_var = None
-        self.load_button = None
         
         # Rate limiting for camera updates
-        import time
         self._last_update_time = 0
         self._min_update_interval = 0.033  # ~30 FPS max to reduce flickering
 
@@ -564,95 +581,34 @@ class CameraPanel:
     
     def _show_no_feed_message(self):
         """Show 'no camera feed' message on canvas"""
-        self._show_canvas_message("📹 No camera feed")
+        self._show_canvas_message("📷 Waiting for camera...")
     
     def _show_canvas_message(self, message, color='white'):
         """Show a message on the camera canvas"""
         if self.camera_canvas:
-            # Clear only message elements, not camera image
-            self.camera_canvas.delete("message")
-            # Reset camera image tracking since we're showing a message
-            if hasattr(self, '_camera_image_id'):
-                delattr(self, '_camera_image_id')
-            if hasattr(self, '_overlay_line_id'):
-                delattr(self, '_overlay_line_id')
-            self.camera_canvas.delete("camera_image", "overlay_line")
-            
-            # Get canvas dimensions without forcing update
-            width = self.camera_canvas.winfo_width() or 400
-            height = self.camera_canvas.winfo_height() or 300
+            # Clear ALL canvas content when showing a message
+            self.camera_canvas.delete("all")
+
+            # Use actual canvas dimensions instead of winfo (which can return 0)
+            width = GUIConfig.CAMERA_PANEL_WIDTH - 20  # 420px
+            height = GUIConfig.CAMERA_PANEL_HEIGHT - 100  # 300px
             self.camera_canvas.create_text(
-                width//2, 
+                width//2,
                 height//2,
                 text=message,
                 tags="message",
                 fill=color,
-                font=('TkDefaultFont', 12)
+                font=('TkDefaultFont', 10),
+                anchor='center'
             )
 
     def _create_camera_controls(self, parent):
         """Create camera control buttons"""
-        # Source selection
-        source_frame = ttk.Frame(parent)
-        source_frame.pack(fill=tk.X, pady=(0, 5))
+        # No source selection needed - only robot camera available
 
-        ttk.Label(source_frame, text="Source:").pack(side=tk.LEFT, padx=(0, 5))
 
-        self.source_var = tk.StringVar(value=GUIConfig.DEFAULT_CAMERA_SOURCE)
-        robot_radio = ttk.Radiobutton(
-            source_frame,
-            text="Robot",
-            variable=self.source_var,
-            value="robot",
-            command=self._on_source_change
-        )
-        robot_radio.pack(side=tk.LEFT, padx=(0, 10))
 
-        loaded_radio = ttk.Radiobutton(
-            source_frame,
-            text="Loaded",
-            variable=self.source_var,
-            value="loaded",
-            command=self._on_source_change
-        )
-        loaded_radio.pack(side=tk.LEFT)
 
-        # Load image button
-        self.load_button = ttk.Button(
-            parent,
-            text="📁 Load Image",
-            command=self._load_image_file
-        )
-        self.load_button.pack(fill=tk.X, pady=(5, 0))
-
-    def _on_source_change(self):
-        """Handle camera source change"""
-        source = self.source_var.get()
-        if self.image_callback:
-            self.image_callback('camera_source_changed', source)
-        
-        # Provide immediate visual feedback
-        if source == "robot":
-            self._show_canvas_message("📷 Waiting for robot camera feed...")
-        elif source == "loaded":
-            self._show_canvas_message("📷 Select 'Load Image' to choose an image")
-
-    def _load_image_file(self):
-        """Load image file from disk"""
-        file_path = filedialog.askopenfilename(
-            title="Select image file",
-            filetypes=[
-                ("Image files", "*.jpg *.jpeg *.png *.bmp *.gif"),
-                ("All files", "*.*")
-            ]
-        )
-
-        if file_path:
-            # Show loading message immediately
-            self._show_canvas_message("📁 Loading image...")
-            
-            if self.image_callback:
-                self.image_callback('image_loaded', file_path)
 
     def update_camera_image(self, pil_image):
         """Update camera display with new image and red line overlay"""
@@ -734,21 +690,14 @@ class CameraPanel:
                 error_msg = f"❌ Error displaying image: {str(e)[:50]}"
                 self._show_canvas_message(error_msg, color='red')
 
-    def set_source(self, source: str):
-        """Set camera source programmatically"""
-        if self.source_var and source in GUIConfig.CAMERA_SOURCES:
-            old_source = self.source_var.get()
-            if old_source != source:
-                self.source_var.set(source)
-                # Don't trigger callback since this is programmatic
-                # The callback will be triggered by the calling code if needed
 
 
 class ActivityLogPanel:
     """Handles activity log panel"""
 
-    def __init__(self, parent):
+    def __init__(self, parent, logger=None):
         self.parent = parent
+        self.logger = logger
         self.log_text = None
 
     def create(self, parent):
@@ -810,10 +759,11 @@ class ActivityLogPanel:
 class VLMAnalysisPanel:
     """Handles analysis panel"""
 
-    def __init__(self, parent, analysis_callback: Callable, log_callback: Callable):
+    def __init__(self, parent, analysis_callback: Callable, log_callback: Callable, logger=None):
         self.parent = parent
         self.analysis_callback = analysis_callback
         self.log_callback = log_callback
+        self.logger = logger
         self.prompt_text = None
         self.result_text = None
         self.command_label = None
@@ -1045,11 +995,4 @@ class VLMAnalysisPanel:
             self.result_text.insert(tk.END, f"\nConfidence: {result_data.get('confidence', 0.0)}\n")
             self.result_text.insert(tk.END, f"Timestamp: {result_data.get('timestamp_ns', 0)}\n")
 
-            self.result_text.config(state=tk.DISABLED)
-
-    def clear_results(self):
-        """Clear analysis results"""
-        if self.result_text:
-            self.result_text.config(state=tk.NORMAL)
-            self.result_text.delete('1.0', tk.END)
             self.result_text.config(state=tk.DISABLED)
