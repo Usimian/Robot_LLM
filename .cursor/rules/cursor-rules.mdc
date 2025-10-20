@@ -1,18 +1,39 @@
 ---
 description: A standalone client for a mecanum wheeled robot using an LLM + sensors for navigation.
-globs: 
+globs:
 alwaysApply: true
 ---
-The application is a client/server system.
-  The client runs on an AMD64 ubuntu 22.04 PC in a python/tkinter/ROS2 framework (this workspace)
-  The robot runs on a jetson orin nano connected via ssh.
-  The robot has an RGB camera, a depth camera, an IMU, a lidar and wheel odometry with mecanum wheels.
-  All messaging should be done through ROS2 nodes and topics.
-Always check the terminal output for errors after running a terminal command.
-There is only one hardware robot at 192.168.1.166.
-All communications with the robot are requested by this client.
-Build ROS2 packages without --symlink-install
-Do not create simulated data.
-Do not create mock data.
-Do not create fallbacks.
-Answers need to be succint and address the issue without generating unrequested extraneous code.
+
+## Robot LLM System Development Rules
+
+### 🏗️ **Architecture**
+- **System Type**: Client/Server ROS2 system
+- **Client**: AMD64 Ubuntu 22.04 PC (Python/Tkinter/ROS2) - *This workspace*
+- **Robot**: Jetson Orin Nano at 192.168.1.166 (SSH connection)
+- **Hardware**: RGB camera, depth camera, IMU, lidar, mecanum wheel odometry
+
+### 📡 **Communication Rules**
+- **Messaging**: ROS2 nodes and topics only (no HTTP/WebSockets)
+- **Initiation**: All robot communications requested by client
+- **Gateway**: Single code point for all robot communications
+
+### 🔧 **Development Standards**
+- **Build**: ROS2 packages without `--symlink-install`
+- **Data**: No simulated/mock/fallback data
+- **Logging**: ROS2 `get_logger()` only (no print() or Python logging)
+- **Testing**: Run only when explicitly requested
+- **Processes**: Manual termination preferred (no automatic pkill)
+
+### ⚡ **Response Guidelines**
+- **Terminal Commands**: Always check output for errors
+- **Code Generation**: Succinct, address issues without extraneous code
+- **Documentation**: No automatic .md files unless requested
+- **Clarification**: Ask when requirements are ambiguous
+
+### 🚫 **Prohibited Actions**
+- Direct publishing to `/cmd_vel` topic
+- Modifying SensorData message definitions
+- Creating simulated or mock data
+- Using HTTP/WebSockets for communication
+- Automatic process termination
+- Fallback implementations

@@ -331,6 +331,8 @@ class RobotGUIROS2:
         self.auto_vlm_enabled = False
         self.auto_vlm_timer = None
         self.auto_execute_enabled = False  # Default: do not auto-execute for safety
+        self.pending_analysis_requests = []  # Track pending ROS2 service calls
+        self.analysis_in_progress = False  # Track if an analysis is currently running
 
         # Threading and queues
         self.update_queue = queue.Queue()
@@ -730,8 +732,9 @@ class RobotGUIROS2:
         try:
             self.logger.info( f"🧹 Simple cleanup starting...")
             
-            # Stop auto analysis timer
+            # Stop auto analysis timer and cancel pending requests
             self._stop_auto_vlm_timer()
+            self._cancel_pending_analysis_requests()
             
             # Don't wait for ROS thread - it will stop on its own
             # Just destroy the node quickly
@@ -782,6 +785,20 @@ class RobotGUIROS2:
     def _request_vlm_analysis(self, prompt: str):
         """Request analysis"""
         try:
+            # Check if an analysis is already in progress
+            if self.analysis_in_progress:
+                self.log_message("⏳ Analysis already in progress - queuing request")
+                return
+
+            # Check if auto analysis has been disabled before proceeding
+            if not self.auto_vlm_enabled and prompt == "Analyze the current camera view for navigation.":
+                self.log_message("🛑 Auto analysis disabled - skipping request")
+                return
+
+            # Mark that analysis is now in progress
+            self.analysis_in_progress = True
+            self.log_message("🚀 Starting VLM analysis...")
+
             # Use the ROS2 node to send real analysis request to VLM service
             if hasattr(self, 'ros_node'):
                 # Call the actual VLM service
@@ -789,15 +806,16 @@ class RobotGUIROS2:
                 if not hasattr(self.ros_node, 'vlm_client'):
                     from robot_msgs.srv import ExecuteCommand
                     self.ros_node.vlm_client = self.ros_node.create_client(ExecuteCommand, '/vlm/analyze_scene')
-                
+
                 if not self.ros_node.vlm_client.wait_for_service(timeout_sec=1.0):
                     self.log_message("❌ VLM analysis service not available")
+                    self.analysis_in_progress = False
                     return
-                
+
                 # Create service request for VLM analysis
                 from robot_msgs.msg import RobotCommand
                 from robot_msgs.srv import ExecuteCommand
-                
+
                 command_msg = RobotCommand()
                 command_msg.command_type = "vlm_analysis"
 
@@ -806,10 +824,23 @@ class RobotGUIROS2:
 
                 # Call service asynchronously
                 future = self.ros_node.vlm_client.call_async(request)
+
+                # Track this pending request
+                self.pending_analysis_requests.append(future)
                 
                 # Handle response in callback
                 def handle_vlm_response(future):
                     try:
+                        # Remove this future from pending requests
+                        if future in self.pending_analysis_requests:
+                            self.pending_analysis_requests.remove(future)
+
+                        # Check if the future was cancelled
+                        if future.cancelled():
+                            self.log_message("🛑 VLM analysis request was cancelled")
+                            self.analysis_in_progress = False
+                            return
+
                         response = future.result()
                         if response.success:
                             # Parse the JSON response from VLM service
@@ -857,7 +888,10 @@ class RobotGUIROS2:
                                 self.log_message(f"✅ VLM analysis: {analysis_text}")
                                 if reasoning and reasoning != 'No reasoning provided':
                                     self.log_message(f"🤖 Model reasoning: {reasoning}")
-                                
+
+                                # Clear the analysis in progress flag on successful completion
+                                self.analysis_in_progress = False
+
                             except json.JSONDecodeError as e:
                                 self.log_message(f"❌ Error parsing VLM JSON response: {e}")
                                 # Fallback to text parsing
@@ -880,7 +914,10 @@ class RobotGUIROS2:
                                 
                                 if hasattr(self, 'vlm_panel'):
                                     self.vlm_panel.update_analysis_result(vlm_result)
-                                
+
+                                # Clear the analysis in progress flag on completion (fallback case)
+                                self.analysis_in_progress = False
+
                             except Exception as e:
                                 self.log_message(f"❌ Error processing VLM response: {e}")
                                 vlm_result = {
@@ -890,29 +927,56 @@ class RobotGUIROS2:
                                     'confidence': 0.0,
                                     'timestamp_ns': self.ros_node.get_clock().now().nanoseconds
                                 }
+                                # Clear the analysis in progress flag on error
+                                self.analysis_in_progress = False
                         else:
                             self.log_message(f"❌ VLM analysis failed: {response.result_message}")
-                            
+                            # Clear the analysis in progress flag on failure
+                            self.analysis_in_progress = False
                     except Exception as e:
                         self.log_message(f"❌ VLM service response error: {e}")
-                
+                        # Clear the analysis in progress flag on error
+                        self.analysis_in_progress = False
+
                 # Add callback for when service call completes
                 future.add_done_callback(handle_vlm_response)
 
         except Exception as e:
             self.log_message(f"❌ VLM analysis error: {e}")
+            # Clear the analysis in progress flag on error
+            self.analysis_in_progress = False
 
     def _toggle_auto_vlm_analysis(self, enabled: bool):
         """Toggle auto VLM analysis on/off"""
         self.auto_vlm_enabled = enabled
-        
+
         if enabled:
             self.log_message("🔄 Auto VLM analysis enabled")
             self._start_auto_vlm_timer()
         else:
-            self.log_message("🔄 Auto VLM analysis disabled")
+            self.log_message("🔄 Auto VLM analysis disabled - cancelling pending requests")
             self._stop_auto_vlm_timer()
-    
+            # Cancel all pending analysis requests
+            self._cancel_pending_analysis_requests()
+
+    def _cancel_pending_analysis_requests(self):
+        """Cancel all pending VLM analysis requests"""
+        cancelled_count = 0
+        for future in self.pending_analysis_requests:
+            try:
+                if not future.done():
+                    future.cancel()
+                    cancelled_count += 1
+            except Exception as e:
+                self.logger.warning(f"⚠️ Error cancelling analysis request: {e}")
+
+        if cancelled_count > 0:
+            self.log_message(f"🛑 Cancelled {cancelled_count} pending analysis request(s)")
+
+        # Clear the pending requests list and reset analysis flag
+        self.pending_analysis_requests.clear()
+        self.analysis_in_progress = False
+
     def _start_auto_vlm_timer(self):
         """Start the auto VLM analysis timer"""
         if self.auto_vlm_timer:
@@ -932,18 +996,30 @@ class RobotGUIROS2:
         if self.auto_vlm_enabled:
             # Perform analysis
             self._auto_vlm_analysis()
-            # Schedule next analysis using configurable interval
-            # Use VLM_AUTO_INTERVAL if available
-            interval_seconds = getattr(GUIConfig, 'VLM_AUTO_INTERVAL', getattr(GUIConfig, 'VLM_AUTO_INTERVAL', 1.0))
-            interval_ms = int(interval_seconds * 1000)  # Convert seconds to milliseconds
-            self.auto_vlm_timer = self.root.after(interval_ms, self._schedule_auto_vlm_analysis)
+            # Double-check auto analysis is still enabled before scheduling next
+            if self.auto_vlm_enabled:
+                # Schedule next analysis using configurable interval
+                # Use VLM_AUTO_INTERVAL if available
+                interval_seconds = getattr(GUIConfig, 'VLM_AUTO_INTERVAL', getattr(GUIConfig, 'VLM_AUTO_INTERVAL', 1.0))
+                interval_ms = int(interval_seconds * 1000)  # Convert seconds to milliseconds
+                self.auto_vlm_timer = self.root.after(interval_ms, self._schedule_auto_vlm_analysis)
+            else:
+                self.log_message("🛑 Auto analysis disabled during analysis - not rescheduling")
     
     def _auto_vlm_analysis(self):
         """Perform automatic VLM analysis"""
         if self.auto_vlm_enabled:
             # Use default prompt for auto analysis
             default_prompt = "Analyze the current camera view for navigation."
+            status_msg = f"🤖 Auto analysis: {len(self.pending_analysis_requests)} pending"
+            if self.analysis_in_progress:
+                status_msg += " (analysis in progress)"
+            else:
+                status_msg += " (ready for new analysis)"
+            self.log_message(status_msg)
             self._request_vlm_analysis(default_prompt)
+        else:
+            self.log_message("🛑 Auto analysis called but disabled - skipping")
     
     def _on_window_close(self):
         """Handle window close event (X button clicked)"""
