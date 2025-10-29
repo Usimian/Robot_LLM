@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Robot Control GUI - Clean Component-Based Version
-Tkinter application for monitoring and controlling robots via ROS2 topics and services
-Replaces HTTP/WebSocket communication with ROS2 messaging
+Tkinter application for monitoring and controlling robots via ROS2 topics
+Uses standard ROS2 messages (cmd_vel) for robot control
 """
 
 import tkinter as tk
@@ -19,10 +19,10 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
 # ROS2 message imports
-from robot_msgs.msg import RobotCommand, SensorData
-from robot_msgs.srv import ExecuteCommand
+from robot_msgs.msg import SensorData
 from sensor_msgs.msg import Image as RosImage, Imu
 from std_msgs.msg import String
+from geometry_msgs.msg import Twist
 
 # GUI component imports
 from .gui_config import GUIConfig
@@ -46,6 +46,16 @@ class RobotGUIROS2Node(Node):
         self.current_camera_image = None
         self.current_sensor_data = None
         
+        # Movement parameters
+        self.linear_speed = 0.5  # m/s
+        self.angular_speed = 0.5  # rad/s
+        self.strafe_speed = 0.5  # m/s for lateral movement
+        
+        # Movement execution tracking
+        self.movement_in_progress = False
+        self.movement_timer = None
+        self.movement_complete_callback = None
+        
         # QoS profiles - use compatible settings
         self.image_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -68,9 +78,10 @@ class RobotGUIROS2Node(Node):
         
         # Setup ROS2 interfaces
         self._setup_subscribers()
-        self._setup_service_clients()
+        self._setup_publishers()
         
         self.get_logger().info("🖥️ Robot GUI ROS2 node initialized")
+        self.get_logger().info("   └── Publishing cmd_vel on /cmd_vel topic")
     
 
     def _setup_subscribers(self):
@@ -119,14 +130,6 @@ class RobotGUIROS2Node(Node):
         
         # Safety status handled locally in GUI - no ROS subscription needed
         
-        # Command acknowledgments
-        self.command_ack_subscriber = self.create_subscription(
-            RobotCommand,
-            '/robot/command_ack',
-            self._command_ack_callback,
-            self.reliable_qos
-        )
-
         # VLM Model status updates
         self.model_status_subscriber = self.create_subscription(
             String,
@@ -135,10 +138,15 @@ class RobotGUIROS2Node(Node):
             self.reliable_qos
         )
     
-    def _setup_service_clients(self):
-        """Setup ROS2 service clients"""
-        # Robot command service client
-        self.robot_client = self.create_client(ExecuteCommand, '/robot/execute_command')
+    def _setup_publishers(self):
+        """Setup ROS2 publishers"""
+        # Standard cmd_vel publisher for robot movement control
+        self.cmd_vel_publisher = self.create_publisher(
+            Twist,
+            '/cmd_vel',
+            10
+        )
+        self.get_logger().info("📡 Created /cmd_vel publisher for robot movement control")
     
     def _sensor_data_callback(self, msg: SensorData):
         """Handle sensor data messages"""
@@ -179,18 +187,6 @@ class RobotGUIROS2Node(Node):
     def _navigation_commands_callback(self, msg: String):
         """Handle navigation commands"""
         self.gui_callback('navigation_commands', msg.data)
-    
-    
-    def _command_ack_callback(self, msg: RobotCommand):
-        """Handle command acknowledgments"""
-        ack_data = {
-            'command_type': msg.command_type,
-            'parameters': msg.parameters,
-            'success': msg.success,
-            'message': msg.message,
-            'timestamp': msg.timestamp_ns
-        }
-        self.gui_callback('command_ack', ack_data)
 
     def _model_status_callback(self, msg: String):
         """Handle VLM Model status updates"""
@@ -201,68 +197,133 @@ class RobotGUIROS2Node(Node):
         except Exception as e:
             self.get_logger().error(f"Error parsing Model status: {e}")
     
-    def send_robot_command(self, command_type: str, parameters: Dict = None, safety_confirmed: bool = False):
-        """Send robot command"""
-        self.get_logger().info(f"🚀 Attempting to send robot command: {command_type}")
+    def send_robot_command(self, command_type: str, parameters: Dict = None, safety_confirmed: bool = False, completion_callback=None):
+        """Send robot movement command via standard cmd_vel topic
+        
+        Executes timed movements (0.5m linear, 45° angular) with automatic stop.
+        
+        Args:
+            command_type: Type of movement command
+            parameters: Optional parameters (can include 'angle' for turns in degrees)
+            safety_confirmed: Safety confirmation flag
+            completion_callback: Function to call when movement completes
+        """
+        # Don't queue multiple movements
+        if self.movement_in_progress and command_type not in ['stop', 'emergency_stop']:
+            self.get_logger().warn(f"⏸️ Movement already in progress, ignoring: {command_type}")
+            return False
+            
+        self.get_logger().info(f"🚀 Sending robot command: {command_type}")
 
-        if not self.robot_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().error(f"Robot command service not available")
+        # Create Twist message for velocity control
+        twist = Twist()
+        duration_sec = None  # Duration for timed movements
+
+        # Parse command type and set velocities
+        if command_type == 'move_forward':
+            speed = parameters.get('speed', self.linear_speed) if parameters else self.linear_speed
+            twist.linear.x = speed
+            twist.linear.y = 0.0
+            twist.angular.z = 0.0
+            # 0.5m forward movement: distance = speed × time → 0.5m = 0.5m/s × 1.0s
+            duration_sec = 1.0
+            self.get_logger().info(f"   └── Moving forward 0.5m over {duration_sec:.2f}s")
+            
+        elif command_type == 'move_backward':
+            speed = parameters.get('speed', self.linear_speed) if parameters else self.linear_speed
+            twist.linear.x = -speed
+            twist.linear.y = 0.0
+            twist.angular.z = 0.0
+            duration_sec = 1.0
+            self.get_logger().info(f"   └── Moving backward 0.5m over {duration_sec:.2f}s")
+            
+        elif command_type == 'turn_left':
+            angular_speed = parameters.get('speed', self.angular_speed) if parameters else self.angular_speed
+            twist.linear.x = 0.0
+            twist.linear.y = 0.0
+            twist.angular.z = angular_speed
+            # 45-degree turn: angle_rad = angular_speed × time
+            import math
+            angle_rad = math.pi / 4.0  # 45 degrees
+            duration_sec = angle_rad / abs(angular_speed)
+            self.get_logger().info(f"   └── Turning left 45° over {duration_sec:.2f}s")
+            
+        elif command_type == 'turn_right':
+            angular_speed = parameters.get('speed', self.angular_speed) if parameters else self.angular_speed
+            twist.linear.x = 0.0
+            twist.linear.y = 0.0
+            twist.angular.z = -angular_speed
+            # 45-degree turn
+            import math
+            angle_rad = math.pi / 4.0  # 45 degrees
+            duration_sec = angle_rad / abs(angular_speed)
+            self.get_logger().info(f"   └── Turning right 45° over {duration_sec:.2f}s")
+            
+        elif command_type == 'strafe_left':
+            speed = parameters.get('speed', self.strafe_speed) if parameters else self.strafe_speed
+            twist.linear.x = 0.0
+            twist.linear.y = speed
+            twist.angular.z = 0.0
+            duration_sec = 1.0
+            
+        elif command_type == 'strafe_right':
+            speed = parameters.get('speed', self.strafe_speed) if parameters else self.strafe_speed
+            twist.linear.x = 0.0
+            twist.linear.y = -speed
+            twist.angular.z = 0.0
+            duration_sec = 1.0
+            
+        elif command_type in ['stop', 'emergency_stop']:
+            twist.linear.x = 0.0
+            twist.linear.y = 0.0
+            twist.angular.z = 0.0
+            # Cancel any pending movement
+            if self.movement_timer:
+                self.movement_timer.cancel()
+                self.movement_timer = None
+            self.movement_in_progress = False
+        else:
+            self.get_logger().warn(f"Unknown command type: {command_type}")
             return False
 
-        self.get_logger().info(f"✅ Robot command service available, sending: {command_type}")
-
-        # Create RobotCommand message for the request
-        command_msg = RobotCommand()
-        command_msg.command_type = command_type
-
-        # Set command parameters based on type
-        # Convert GUI command types to robot interface command types
-        if command_type == 'move_forward':
-            command_msg.command_type = 'move'
-            command_msg.linear_x = parameters.get('speed', 0.5) if parameters else 0.5
-            command_msg.distance = parameters.get('distance', 0.3) if parameters else 0.3  # 0.3m per button press
-        elif command_type == 'move_backward':
-            command_msg.command_type = 'move'
-            command_msg.linear_x = -(parameters.get('speed', 0.5) if parameters else 0.5)
-            command_msg.distance = parameters.get('distance', 0.3) if parameters else 0.3  # 0.3m per button press
-        elif command_type == 'turn_left':
-            command_msg.command_type = 'turn'
-            command_msg.angular = parameters.get('angle', 45.0) if parameters else 45.0  # 45° per button press
-            command_msg.angular_speed = parameters.get('speed', 0.5) if parameters else 0.5  # rad/s
-        elif command_type == 'turn_right':
-            command_msg.command_type = 'turn'
-            command_msg.angular = -(parameters.get('angle', 45.0) if parameters else 45.0)  # -45° per button press
-            command_msg.angular_speed = parameters.get('speed', 0.5) if parameters else 0.5  # rad/s
-        elif command_type == 'strafe_left':
-            command_msg.command_type = 'move'
-            command_msg.linear_y = parameters.get('speed', 0.8) if parameters else 0.8
-            command_msg.distance = parameters.get('distance', 0.3) if parameters else 0.3
-        elif command_type == 'strafe_right':
-            command_msg.command_type = 'move'
-            command_msg.linear_y = -(parameters.get('speed', 0.8) if parameters else 0.8)
-            command_msg.distance = parameters.get('distance', 0.3) if parameters else 0.3
-        elif command_type == 'stop':
-            command_msg.command_type = 'stop'
-            command_msg.linear_x = 0.0
-            command_msg.linear_y = 0.0
-            command_msg.angular = 0.0
-            command_msg.angular_speed = 0.0
-        elif command_type == 'emergency_stop':
-            command_msg.command_type = 'stop'
-            command_msg.linear_x = 0.0
-            command_msg.linear_y = 0.0
-            command_msg.angular = 0.0
-            command_msg.angular_speed = 0.0
-        elif command_type == 'safety_toggle':
-            command_msg.command_type = 'safety_toggle'
-
-        request = ExecuteCommand.Request()
-        request.command = command_msg
-
-        self.get_logger().info(f"📡 Calling robot command service for: {command_type}")
-        future = self.robot_client.call_async(request)
-        self.get_logger().info(f"📤 Command sent to robot: {command_type}")
-        return future
+        # Publish velocity command
+        self.cmd_vel_publisher.publish(twist)
+        self.get_logger().info(f"📤 Published cmd_vel: linear=({twist.linear.x:.2f}, {twist.linear.y:.2f}), angular={twist.angular.z:.2f}")
+        
+        # Schedule automatic stop for timed movements
+        if duration_sec and command_type not in ['stop', 'emergency_stop']:
+            self.movement_in_progress = True
+            self.movement_complete_callback = completion_callback
+            
+            # Create ROS2 timer to stop movement after duration
+            self.movement_timer = self.create_timer(duration_sec, self._on_movement_complete)
+            self.get_logger().info(f"⏱️ Movement will complete in {duration_sec:.2f}s")
+        
+        return True
+    
+    def _on_movement_complete(self):
+        """Called when timed movement completes"""
+        self.get_logger().info("✅ Movement complete - stopping robot")
+        
+        # Stop the robot
+        stop_twist = Twist()
+        self.cmd_vel_publisher.publish(stop_twist)
+        
+        # Cancel timer
+        if self.movement_timer:
+            self.movement_timer.cancel()
+            self.movement_timer = None
+        
+        self.movement_in_progress = False
+        
+        # Call completion callback if provided
+        if self.movement_complete_callback:
+            callback = self.movement_complete_callback
+            self.movement_complete_callback = None
+            # Execute callback via GUI callback to ensure thread safety
+            self.gui_callback('movement_complete', {})
+        
+        self.get_logger().info("🔓 Ready for next movement")
 
 
 class RobotGUIROS2:
@@ -506,7 +567,10 @@ class RobotGUIROS2:
     # _process_updates method removed - using direct ROS2 callbacks
 
     def _handle_movement_command(self, command):
-        """Handle movement command from movement panel"""
+        """Handle movement command from movement panel
+        
+        CRITICAL: Always queue ROS2 commands to avoid thread safety issues
+        """
         if isinstance(command, str):
             # Direct command string - check safety for movement commands
             if command in ['move_forward', 'move_backward', 'turn_left', 'turn_right']:
@@ -514,7 +578,8 @@ class RobotGUIROS2:
                     self.log_message("🚫 Movement blocked by safety lock")
                     return
             self.log_message(f"🤖 Sending movement command: {command}")
-            self.ros_node.send_robot_command(command)
+            # Queue command for execution on GUI thread (prevents segfault)
+            self.root.after(0, lambda: self.ros_node.send_robot_command(command))
         elif isinstance(command, tuple) and len(command) == 2 and command[0] == 'safety_toggle':
             # Safety toggle command
             command_type, is_enabled = command
@@ -567,8 +632,8 @@ class RobotGUIROS2:
                 self._handle_movement_status(data)
             elif message_type == 'model_status':
                 self._handle_model_status(data)
-            elif message_type == 'command_ack':
-                self._handle_command_ack(data)
+            elif message_type == 'movement_complete':
+                self._handle_movement_complete(data)
             else:
                 self.logger.warning( f"Unknown ROS message type: {message_type}")
         except Exception as e:
@@ -641,11 +706,16 @@ class RobotGUIROS2:
         """Handle VLM Model status updates"""
         if hasattr(self, 'system_panel'):
             self.system_panel.update_model_status(data)
-
-    def _handle_command_ack(self, data):
-        """Handle command acknowledgments"""
-        status = "✅ Success" if data['success'] else "❌ Failed"
-        self.log_message(f"🤖 Command {data['command_type']}: {status}")
+    
+    def _handle_movement_complete(self, data):
+        """Handle movement completion - trigger next analysis if auto-execute enabled"""
+        self.log_message("✅ Movement complete")
+        
+        # If auto-execute is enabled, request next analysis
+        if self.auto_execute_enabled and self.auto_vlm_enabled:
+            self.log_message("🔄 Requesting next analysis...")
+            # Small delay to let sensors settle
+            self.root.after(500, lambda: self._auto_vlm_analysis())
 
     def _update_system_status(self):
         """Update system status display"""
@@ -782,17 +852,23 @@ class RobotGUIROS2:
             self.log_message("🤖 Auto execute VLM recommendations disabled")
 
 
-    def _request_vlm_analysis(self, prompt: str):
-        """Request analysis"""
+    def _request_vlm_analysis(self, prompt: str, is_auto_request: bool = False):
+        """Request analysis
+        
+        Args:
+            prompt: The analysis prompt text
+            is_auto_request: True if this is an automatic periodic request, False if manually triggered
+        """
         try:
             # Check if an analysis is already in progress
             if self.analysis_in_progress:
                 self.log_message("⏳ Analysis already in progress - queuing request")
                 return
 
-            # Check if auto analysis has been disabled before proceeding
-            if not self.auto_vlm_enabled and prompt == "Analyze the current camera view for navigation.":
-                self.log_message("🛑 Auto analysis disabled - skipping request")
+            # Only block auto-triggered requests when auto analysis is disabled
+            # Manual requests (from Analyze button) should always go through
+            if is_auto_request and not self.auto_vlm_enabled:
+                self.log_message("🛑 Auto analysis disabled - skipping automatic request")
                 return
 
             # Mark that analysis is now in progress
@@ -817,19 +893,23 @@ class RobotGUIROS2:
                 from robot_msgs.srv import ExecuteCommand
 
                 command_msg = RobotCommand()
-                command_msg.command_type = "vlm_analysis"
+                # Encode prompt in command_type field (format: "vlm_analysis:PROMPT")
+                command_msg.command_type = f"vlm_analysis:{prompt}"
 
                 request = ExecuteCommand.Request()
                 request.command = command_msg
 
                 # Call service asynchronously
+                self.log_message(f"📤 Sending VLM request: {command_msg.command_type}")
                 future = self.ros_node.vlm_client.call_async(request)
 
                 # Track this pending request
                 self.pending_analysis_requests.append(future)
+                self.log_message(f"✅ VLM request sent, waiting for response...")
                 
                 # Handle response in callback
                 def handle_vlm_response(future):
+                    self.log_message(f"📥 VLM response callback triggered")
                     try:
                         # Remove this future from pending requests
                         if future in self.pending_analysis_requests:
@@ -870,18 +950,25 @@ class RobotGUIROS2:
                                     self.vlm_panel.update_analysis_result(vlm_result)
                                 
                                 # EXECUTE THE RECOMMENDED ACTION (if auto-execute enabled)
+                                # Synchronous execution: analyze → move → wait → repeat
                                 if self.auto_execute_enabled:
-                                    self.log_message(f"🤖 DEBUG: Checking execution conditions - action: {action}, confidence: {confidence:.2f}, movement_enabled: {self.movement_enabled}")
+                                    self.log_message(f"🤖 Checking execution conditions - action: {action}, confidence: {confidence:.2f}")
                                     if action != "stop" and confidence > 0.4:
                                         if self.movement_enabled:
-                                            self.log_message(f"🤖 Executing VLM recommendation: {action} (confidence: {confidence:.2f})")
-                                            self.ros_node.send_robot_command(action)
+                                            # Check if movement is already in progress
+                                            if self.ros_node.movement_in_progress:
+                                                self.log_message(f"⏸️ Movement in progress, will re-analyze after completion")
+                                            else:
+                                                self.log_message(f"🤖 Executing: {action} (confidence: {confidence:.2f})")
+                                                # Execute command (will block new commands until complete)
+                                                self.root.after(0, lambda: self.ros_node.send_robot_command(action))
+                                                # Next analysis will be triggered by movement_complete callback
                                         else:
                                             self.log_message(f"🔒 Movement disabled - VLM recommended: {action}")
                                     else:
-                                        self.log_message(f"🛑 VLM recommends: {action} (confidence: {confidence:.2f}) - Conditions not met (confidence <= 0.6 or action is stop)")
+                                        self.log_message(f"🛑 VLM recommends: {action} (confidence: {confidence:.2f})")
                                         if action == "stop":
-                                            self.ros_node.send_robot_command("stop")
+                                            self.root.after(0, lambda: self.ros_node.send_robot_command("stop"))
                                 else:
                                     self.log_message(f"📋 VLM recommends: {action} (confidence: {confidence:.2f}) - Auto-execute disabled")
                                 
@@ -1017,7 +1104,8 @@ class RobotGUIROS2:
             else:
                 status_msg += " (ready for new analysis)"
             self.log_message(status_msg)
-            self._request_vlm_analysis(default_prompt)
+            # Mark this as an automatic request
+            self._request_vlm_analysis(default_prompt, is_auto_request=True)
         else:
             self.log_message("🛑 Auto analysis called but disabled - skipping")
     
@@ -1030,33 +1118,42 @@ class RobotGUIROS2:
                 self.root.after_cancel(self.auto_vlm_timer)
                 self.auto_vlm_timer = None
 
-            # Stop ROS2 spinning thread
+            # Stop ROS2 spinning thread gracefully
             if hasattr(self, 'ros_spin_thread') and self.ros_spin_thread and self.ros_spin_thread.is_alive():
                 self.logger.info("🛑 Stopping ROS2 spinning thread...")
-                # Don't join - just let it finish naturally
+                # Set a flag to stop the spin thread
+                self._running = False
 
             # Cleanup ROS2 resources
             self.logger.info(f"🧹 Cleaning up GUI resources...")
             if hasattr(self, 'ros_node') and self.ros_node:
                 try:
+                    # Publish a stop command before closing
+                    try:
+                        from geometry_msgs.msg import Twist
+                        stop_msg = Twist()
+                        self.ros_node.cmd_vel_publisher.publish(stop_msg)
+                        self.logger.info("🛑 Published stop command before shutdown")
+                    except Exception:
+                        pass
+                    
                     self.ros_node.destroy_node()
+                    self.logger.info("✅ ROS2 node destroyed")
                 except Exception as e:
                     self.logger.warning(f"⚠️ Error destroying ROS2 node: {e}")
 
+            # Shutdown ROS2 if we initialized it
+            try:
+                if rclpy.ok():
+                    self.logger.info("🛑 Shutting down ROS2...")
+                    rclpy.shutdown()
+                    self.logger.info("✅ ROS2 shutdown complete")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Error shutting down ROS2: {e}")
+
             self.logger.info(f"✅ GUI cleanup complete")
             
-            # Send SIGTERM to parent process group to terminate launch
-            import os
-            import signal
-            try:
-                # Get the process group ID and send SIGTERM to terminate launch
-                pgid = os.getpgid(0)
-                self.logger.info( f"🛑 Sending SIGTERM to process group {pgid}")
-                os.killpg(pgid, signal.SIGTERM)
-            except Exception as e:
-                self.logger.warning( f"⚠️ Could not terminate process group: {e}")
-            
-            # Destroy the window and exit
+            # Destroy the window
             self.logger.info("🔒 Destroying window...")
             try:
                 self.root.quit()
@@ -1064,12 +1161,25 @@ class RobotGUIROS2:
             except Exception as e:
                 self.logger.warning(f"⚠️ Error destroying window: {e}")
 
-            # Final exit - don't call os._exit here, let main thread handle it
+            # Signal the launch process to terminate all nodes
+            self.logger.info("🛑 Requesting launch system shutdown...")
+            import os
+            import signal
+            try:
+                # Send SIGINT (Ctrl-C) to the parent process group to terminate launch cleanly
+                # This is different from SIGTERM - it triggers ROS2 launch's shutdown handlers
+                parent_pid = os.getppid()
+                self.logger.info(f"   └── Sending SIGINT to parent process {parent_pid}")
+                os.kill(parent_pid, signal.SIGINT)
+            except Exception as e:
+                self.logger.warning(f"⚠️ Could not signal parent process: {e}")
+
             self.logger.info("🚪 Window close cleanup finished")
             
         except Exception as e:
             self.logger.error(f"❌ Error during window close: {e}")
-            # Don't force exit - let main thread handle cleanup
+            import traceback
+            traceback.print_exc()
 
 
 def main():
@@ -1086,8 +1196,8 @@ def main():
             app._on_window_close()  # Use the same cleanup path as window close
         else:
             print("🚪 No app to cleanup, exiting...")
-            import os
-            os._exit(0)
+            import sys
+            sys.exit(0)
 
     # Set up signal handlers for consistent shutdown
     signal.signal(signal.SIGINT, signal_handler)   # Ctrl-C
@@ -1151,11 +1261,11 @@ def main():
         import traceback
         traceback.print_exc()
     finally:
-        # Don't do cleanup here - it was already done in _on_window_close
+        # Cleanup already done in _on_window_close
         print("👋 Robot GUI application exited")
-        # Use os._exit to avoid any remaining cleanup issues
-        import os
-        os._exit(0)
+        # Let Python exit naturally instead of forcing with os._exit
+        import sys
+        sys.exit(0)
 
 
 if __name__ == '__main__':

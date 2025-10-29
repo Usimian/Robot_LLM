@@ -122,11 +122,9 @@ class SystemStatusPanel:
             if status_data.get('model_loaded', False):
                 # Show RoboMP2-enhanced model name when loaded
                 model_name = status_data.get('model_name', GUIConfig.DEFAULT_VLM_MODEL)
-                # Display as RoboMP2-enhanced system
-                if GUIConfig.DEFAULT_VLM_MODEL.split('/')[-1] in model_name:
-                    status_text = "RoboMP2 + Qwen2.5-VL-7B"
-                else:
-                    status_text = f"RoboMP2 + {model_name.split('/')[-1]}"  # Get last part after slash
+                # Display as RoboMP2-enhanced system - extract model name from config
+                model_short_name = model_name.split('/')[-1]  # Get last part after slash
+                status_text = f"RoboMP2 + {model_short_name}"
                 color = GUIConfig.COLORS['success']
             elif status_data.get('status') == 'model_load_failed':
                 status_text = "Error"
@@ -293,9 +291,9 @@ class MovementControlPanel:
         
         ttk.Label(range_frame, text="Range:", font=('TkDefaultFont', 9)).pack(side=tk.LEFT)
         
-        # Range value display
-        self.range_var = tk.DoubleVar(value=3.0)
-        self.range_label = ttk.Label(range_frame, text="3.0m", font=('TkDefaultFont', 9))
+        # Range value display - use config default
+        self.range_var = tk.DoubleVar(value=GUIConfig.LIDAR_MAX_RANGE)
+        self.range_label = ttk.Label(range_frame, text=f"{GUIConfig.LIDAR_MAX_RANGE:.1f}m", font=('TkDefaultFont', 9))
         self.range_label.pack(side=tk.RIGHT)
         
         # Range slider (0.4m to 5.0m)
@@ -353,9 +351,9 @@ class MovementControlPanel:
             self._draw_lidar_arc()
         except (ValueError, AttributeError):
             # Invalid range value, revert to default
-            self.max_range = 3.0
+            self.max_range = GUIConfig.LIDAR_MAX_RANGE
             if hasattr(self, 'range_label'):
-                self.range_label.config(text="3.0m")
+                self.range_label.config(text=f"{GUIConfig.LIDAR_MAX_RANGE:.1f}m")
     
     # REMOVED: _schedule_lidar_update - no more periodic updates!
     # LiDAR display now only updates when data actually changes
@@ -478,12 +476,15 @@ class MovementControlPanel:
                 num_points = len(self.raw_lidar_ranges)
 
                 # Pre-compute angles if not already done or if scan size changed
+                # ROS2 LaserScan: index 0 = back of robot (-180°), increases counterclockwise
+                # index at num_points/2 = front of robot (0°)
                 if (self._lidar_angles_rad is None or
                     len(self._lidar_angles_rad) != num_points):
                     self._lidar_angles_rad = []
                     self._lidar_angles_deg = []
                     for i in range(num_points):
-                        scan_angle_rad = -math.pi + (i / (num_points - 1)) * (2 * math.pi)
+                        # Angle in robot frame: starts at -pi (back), goes to +pi
+                        scan_angle_rad = -math.pi + (i / num_points) * (2 * math.pi)
                         self._lidar_angles_rad.append(scan_angle_rad)
                         self._lidar_angles_deg.append(math.degrees(scan_angle_rad))
 
@@ -501,21 +502,25 @@ class MovementControlPanel:
                     scan_angle_rad = self._lidar_angles_rad[i]
                     scan_angle_deg = self._lidar_angles_deg[i]
 
-                    # Skip rear 90° blind spot
-                    if -45 <= scan_angle_deg <= 45:
+                    # Skip rear 90° blind spot (back of robot is at ±180°)
+                    # Block from 135° to -135° (270° total arc at the back)
+                    if scan_angle_deg > 135 or scan_angle_deg < -135:
                         continue
 
                     # Calculate point position - optimized calculations
+                    # Robot frame: 0° = front (where lidar is mounted), +90° = left, -90° = right, ±180° = back
+                    # Screen frame: up = front (0°), right = right (-90°), down = back (180°), left = left (90°)
+                    # Lidar mounted at front, so rotate by +90° (not -90°) to make front point up
                     scaled_distance = distance / self.max_range
-                    screen_angle_rad = scan_angle_rad - math.pi/2
+                    screen_angle_rad = scan_angle_rad + math.pi/2
 
                     # Use pre-computed canvas boundaries
                     dx = scaled_distance * center_x * math.cos(screen_angle_rad)
                     dy = scaled_distance * center_y * math.sin(screen_angle_rad)
 
-                    # Map to screen coordinates
+                    # Map to screen coordinates (Y increases downward in screen coordinates)
                     point_x = center_x + dx
-                    point_y = center_y - dy
+                    point_y = center_y - dy  # Flip Y because screen Y increases downward
 
                     # Collect points for batch drawing
                     points_to_draw.append((point_x, point_y))
@@ -525,10 +530,10 @@ class MovementControlPanel:
                     self.lidar_canvas.create_rectangle(point_x-1, point_y-1, point_x+1, point_y+1,
                                                      fill="red", outline="red", width=0)
             
-            # Draw robot as upward-pointing triangle (front = up) at center - using pre-computed values
+            # Draw robot as upward-pointing triangle (front = up) at center
             triangle_size = 6
             triangle_points = [
-                center_x, center_y - triangle_size,      # Top point (front)
+                center_x, center_y - triangle_size,      # Top point (front pointing up)
                 center_x - triangle_size//2, center_y + triangle_size//2,  # Bottom left
                 center_x + triangle_size//2, center_y + triangle_size//2   # Bottom right
             ]

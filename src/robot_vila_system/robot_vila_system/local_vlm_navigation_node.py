@@ -5,7 +5,7 @@ RoboMP2-Enhanced VLM Navigation Node
 This ROS2 node integrates RoboMP2 framework components:
 - Goal-Conditioned Multimodal Perceptor (GCMP) for environment state understanding
 - Retrieval-Augmented Multimodal Planner (RAMP) for enhanced planning capabilities
-- Uses local VLM (Qwen2.5-VL-7B-Instruct) running on RTX 3090
+- Uses local VLM for vision-based navigation (model configured in GUIConfig)
 
 Author: Robot LLM System with RoboMP2 Integration
 """
@@ -33,7 +33,7 @@ from std_msgs.msg import String
 # Computer Vision and ML
 import torch
 from PIL import Image
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor
+from transformers import AutoModelForVision2Seq, AutoTokenizer, AutoProcessor
 import transformers
 transformers.logging.set_verbosity_error()  # Suppress generation warnings
 
@@ -265,9 +265,8 @@ class RoboMP2NavigationNode(Node):
             
         except Exception as e:
             self.get_logger().error(f"❌ Failed to initialize RoboMP2 components: {e}")
-            # Continue without RoboMP2 - fallback to basic VLM navigation
-            self.gcmp = None
-            self.ramp = None
+            self.get_logger().error("❌ RoboMP2 is required for navigation - cannot proceed")
+            raise RuntimeError(f"RoboMP2 initialization failed: {e}")
     
     def _start_model_loading(self):
         """Start model loading in background thread"""
@@ -291,14 +290,14 @@ class RoboMP2NavigationNode(Node):
                 )
                 
                 # Load model with speed and memory optimization
-                self.get_logger().info("   └── Loading Qwen2.5-VL model with speed optimization...")
-                self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_short_name = self.model_name.split('/')[-1]
+                self.get_logger().info(f"   └── Loading {model_short_name} model with speed optimization...")
+                self.model = AutoModelForVision2Seq.from_pretrained(
                     self.model_name,
                     dtype=torch.float16,        # Use FP16 for speed and memory efficiency (fixed deprecated torch_dtype)
                     device_map="cuda:0",        # Force GPU placement to avoid meta device issues
                     trust_remote_code=True,
-                    low_cpu_mem_usage=True,     # Reduce CPU memory usage during loading
-                    use_cache=True              # Enable KV caching for faster generation
+                    low_cpu_mem_usage=True      # Reduce CPU memory usage during loading
                 )
                 
                 # Ensure all model parameters are on GPU (fix meta device issue)
@@ -454,19 +453,20 @@ class RoboMP2NavigationNode(Node):
         ranges = np.where(ranges > 10.0, 10.0, ranges)  # Cap at 10m
         ranges = np.where(ranges < 0.05, 0.05, ranges)  # Minimum 5cm
         
-        # Step 4: Advanced temporal smoothing with outlier detection
+        # Step 4: Light temporal smoothing for noise only (NOT for obstacle detection)
+        # WARNING: Heavy smoothing is DANGEROUS - it makes obstacles appear farther than they are!
         if hasattr(self, 'previous_ranges') and self.previous_ranges is not None and len(self.previous_ranges) == len(ranges):
-            alpha = 0.2  # More conservative smoothing
+            alpha = 0.9  # Light smoothing - trust new data (90% new, 10% old)
             
-            # Calculate change rate to detect outliers
+            # Only smooth when change is very small (likely noise, not real obstacle movement)
             change_rate = np.abs(ranges - self.previous_ranges)
-            outlier_threshold = 2.0  # 2m change threshold
+            noise_threshold = 0.05  # Only smooth changes < 5cm (sensor noise)
             
-            # Apply smoothing, but preserve rapid changes for real obstacles
-            smooth_mask = change_rate < outlier_threshold
+            # Apply minimal smoothing ONLY to noise, preserve all real changes
+            smooth_mask = change_rate < noise_threshold
             ranges = np.where(smooth_mask, 
                              alpha * ranges + (1 - alpha) * self.previous_ranges,
-                             ranges)  # Keep rapid changes as-is
+                             ranges)  # Keep all real changes as-is
         
         # Step 5: Median filtering for noise reduction (only for large scans)
         if len(ranges) > 5:
@@ -521,8 +521,17 @@ class RoboMP2NavigationNode(Node):
                 sensor_data = self._get_current_sensor_data()
                 lidar_data = self._get_current_lidar_data()
                 
-                # Use default prompt
-                prompt = "Analyze the current scene for robot navigation"
+                # Extract custom prompt from request if provided
+                # Prompt is encoded in command_type as "vlm_analysis:PROMPT"
+                prompt = "Analyze the current scene for robot navigation"  # Default
+                if hasattr(request, 'command') and hasattr(request.command, 'command_type'):
+                    cmd_type = request.command.command_type
+                    if ':' in cmd_type:
+                        # Extract prompt after the colon
+                        parts = cmd_type.split(':', 1)
+                        if len(parts) == 2 and parts[0] == 'vlm_analysis':
+                            prompt = parts[1].strip()
+                            self.get_logger().info(f"📝 Using custom prompt: {prompt}")
             
                 # Run VLM inference with RAW LiDAR data (not processed/filtered)
                 navigation_result = self._run_vlm_navigation_inference(current_image, prompt, sensor_data, lidar_data)
@@ -686,8 +695,13 @@ class RoboMP2NavigationNode(Node):
                     raw_msg = self.latest_raw_lidar_msg
                     raw_ranges = np.array(raw_msg.ranges, dtype=np.float64)
                 else:
-                    # Fallback to processed data if no raw message available
-                    raw_ranges = np.array(lidar_data['ranges']) if lidar_data else np.array([])
+                    # No raw LiDAR data available - this is an error
+                    self.get_logger().error("❌ No raw LiDAR message available for VLM analysis")
+                    return {
+                        'action': 'stop',
+                        'confidence': 0.0,
+                        'reasoning': 'ERROR: No LiDAR data available - cannot navigate safely'
+                    }
 
             # For VLM analysis, use minimally processed sensor data
             # Only handle infinite/NaN values, preserve ALL actual distances including very close ones
@@ -748,24 +762,34 @@ class RoboMP2NavigationNode(Node):
                     target_angles = np.arange(0, 360, quantization_degrees)
 
                     # Map target angles to original angle range
-                    # Handle LiDARs that don't start at 0 degrees (e.g., -180° to +180°)
-                    # For LiDARs starting at negative angles, we need to shift them to 0-360° range
+                    # Handle LiDARs that scan from -180° to +180° (need to reorder for 0-360° target)
                     if msg.angle_min < 0:
-                        # Shift negative angles to positive range for proper interpolation
-                        shifted_angles_deg = (original_angles_deg + 360) % 360
-                        scaled_target_angles = target_angles  # Target is already 0-360°
-                        quantized_ranges = np.interp(scaled_target_angles, shifted_angles_deg, vlm_ranges,
-                                                   left=vlm_ranges[0], right=vlm_ranges[-1])
+                        # LiDAR scans from -180° to +180°, but we want output as 0° to 360°
+                        # Find the split point where angle crosses from negative to positive (0°/forward)
+                        split_idx = np.argmin(np.abs(original_angles_deg))
+                        
+                        # Reorder data: [0° to 180°] + [180° to 360° (which was -180° to 0°)]
+                        reordered_angles = np.concatenate([
+                            original_angles_deg[split_idx:] + (360 if original_angles_deg[split_idx] < 0 else 0),
+                            original_angles_deg[:split_idx] + 360
+                        ])
+                        reordered_ranges = np.concatenate([vlm_ranges[split_idx:], vlm_ranges[:split_idx]])
+                        
+                        # Now interpolate on properly ordered data (0° to 360°)
+                        quantized_ranges = np.interp(target_angles, reordered_angles, reordered_ranges,
+                                                   period=360)
                     else:
                         # Standard case for LiDARs starting at 0°
                         quantized_ranges = np.interp(target_angles, original_angles_deg, vlm_ranges,
                                                    left=vlm_ranges[0], right=vlm_ranges[-1])
                 else:
-                    # Fallback if no message available
-                    original_angles = np.linspace(0, 359, len(vlm_ranges))
-                    target_angles = np.arange(0, 360, quantization_degrees)
-                    quantized_ranges = np.interp(target_angles, original_angles, vlm_ranges,
-                                               left=vlm_ranges[0], right=vlm_ranges[-1])
+                    # No LiDAR message metadata available - cannot proceed
+                    self.get_logger().error("❌ No LiDAR message metadata available for angle calculation")
+                    return {
+                        'action': 'stop',
+                        'confidence': 0.0,
+                        'reasoning': 'ERROR: Cannot determine LiDAR angles - invalid sensor data'
+                    }
 
                 # Handle obstructed rear area (135-225 degrees)
                 obstructed_start_idx = int(135 / quantization_degrees)
@@ -811,15 +835,15 @@ class RoboMP2NavigationNode(Node):
             self.get_logger().info(f"   └── VLM INPUT DATA: Camera + 360° LiDAR scan")
             self.get_logger().info(f"   └── DEBUG SENSOR_INFO: {sensor_info}")
             
-            # Navigation prompt - FORCE ANALYSIS OF RAW SCAN DATA ONLY
-            navigation_prompt = f"""You are a robot navigation assistant. Analyze this camera image and the RAW {num_points}° LiDAR scan data to make an intelligent navigation decision.
-
-🚨 MANDATORY: You MUST analyze the FULL_{num_points}_LIDAR_SCAN_DATA above. DO NOT use any pre-computed summaries. Examine each of the {num_points} angles individually to find optimal navigation paths.
+            # Navigation prompt - CONCISE format to avoid token waste
+            navigation_prompt = f"""Robot navigation decision required. Camera + LiDAR scan provided.
 
 SENSOR DATA: {sensor_info}
 TASK: {prompt}
 
-LIDAR EXPLANATION:
+CRITICAL FORMAT: Start your response IMMEDIATELY with "ACTION: [action]" where action is one of: stop, move_forward, turn_left, turn_right, strafe_left, strafe_right
+
+LIDAR ANGLES:
 - 0° = directly ahead (forward)
 - 90° = hard left
 - 180° = directly behind
@@ -837,66 +861,55 @@ TURNING DIRECTIONS:
 - If best clearance is at angles 225°-315° (back-right) → turn_right to face it
 - If best clearance is at angles 135°-225° (back-left) → turn_left to face it
 
-SAFETY RULES:
-- ANY distance < 0.5m = CRITICAL - MUST avoid/stop
-- Distance 0.5m-1.0m = DANGEROUS - approach with caution
-- Distance > 1.0m = SAFE to navigate toward
-- Distance > 2.0m = VERY SAFE - clear path
+⚠️ CRITICAL SAFETY RULES - FOLLOW EXACTLY:
+- Distance < 0.5m = CRITICAL DANGER - STOP or TURN AWAY immediately
+- Distance 0.5m-1.5m = TOO CLOSE - DO NOT move_forward, TURN instead  
+- Distance > 1.5m = SAFE - OK to move_forward
+- Distance > 3.0m = VERY SAFE - clear path
 
-INTELLIGENT NAVIGATION STRATEGY:
-1. Check ALL directions for the best navigation option
-2. Prioritize exploration and finding optimal paths over just moving forward
-3. Use turns to discover better routes, not just for obstacle avoidance
-4. Consider the overall environment layout, not just immediate front distance
+🚨 MANDATORY DECISION RULES (CHECK FRONT FIRST):
+1. **Front < 1.5m** → NEVER move_forward, MUST turn_left or turn_right toward clearer side
+2. **Front >= 1.5m** → move_forward is SAFE and PREFERRED
+3. **All directions < 1.0m** → stop (rare)
 
-MECANUM WHEEL CAPABILITIES:
-This robot has mecanum wheels and can:
-- Move forward/backward (best for clear straight paths)
-- Strafe left/right (excellent for sideways movement in tight spaces)
-- Rotate in place (turn_left/turn_right) - IDEAL for exploration and finding better paths
-- Combine movements for optimal navigation
-
-SMART DECISION SCENARIOS:
-- Front: 0.8m, Left: 3.0m, Right: 2.0m → turn_left (explore left for better path)
-- Front: 1.2m, Left: 0.6m, Right: 4.0m → turn_right (right side much clearer)
-- Front: 2.5m, Left: 1.5m, Right: 1.5m → move_forward (good straight path)
-- Front: 0.7m, Left: 2.5m, Right: 0.8m → strafe_left (avoid front obstacle by sliding left)
-- Front: 1.8m, Left: 0.9m, Right: 3.5m → turn_right (right offers much better opportunity)
-- Front: 3.0m, Left: 4.0m, Right: 2.0m → turn_left (explore left for even better path)
-
-EXPLORATION PHILOSOPHY:
-- Turns are POWERFUL tools for finding optimal routes
-- Don't just move forward when a turn could lead to a much better path
-- Consider long-term navigation efficiency, not just immediate movement
-- Use camera + LiDAR together for intelligent path planning
-
-CRITICAL DECISION FACTORS:
-1. Front distance < 1.0m → Consider alternatives (turn/strafe) before stopping
-2. Clear directional advantage → Turn toward the best opportunity
-3. Exploration opportunity → Turn to discover new areas
-4. Path optimization → Choose turn if it leads to significantly better conditions
+EXAMPLES WITH FRONT DISTANCE CHECK:
+- Front: 0.5m → ❌ DO NOT move_forward (< 1.5m) → turn_left or turn_right
+- Front: 1.0m → ❌ DO NOT move_forward (< 1.5m) → turn_left or turn_right  
+- Front: 1.4m → ❌ DO NOT move_forward (< 1.5m) → turn_left or turn_right
+- Front: 1.5m → ✅ SAFE to move_forward (>= 1.5m)
+- Front: 2.0m → ✅ SAFE to move_forward (>= 1.5m)
+- Front: 3.0m → ✅ SAFE to move_forward (>= 1.5m)
 
 Choose ONE action:
-- stop: ONLY if surrounded on all sides (< 1.0m in all directions)
-- move_forward: When front has clear advantage and good distance (> 2.0m)
-- turn_left: To explore left, avoid obstacles, or find better paths
-- turn_right: To explore right, avoid obstacles, or find better paths
-- strafe_left: For precise sideways movement when left is clear (> 1.5m)
-- strafe_right: For precise sideways movement when right is clear (> 1.5m)
+- **move_forward**: ONLY if front >= 1.5m (check 0° angle first!)
+- **turn_left**: If front < 1.5m AND left side clearer  
+- **turn_right**: If front < 1.5m AND right side clearer
+- strafe_left: If front < 1.0m AND left > 1.5m
+- strafe_right: If front < 1.0m AND right > 1.5m
+- stop: If all directions < 1.0m
 
-RESPONSE FORMAT (follow exactly):
-1. Analyze situation: "Based on 360° scan analysis: [comprehensive assessment using full scan data]"
-2. Choose strategy: "Best action is [turn_left/move_forward/etc.] because [reason based on full scan]"
-3. State confidence: "High confidence because [justification from complete scan analysis]"
+🚨 MANDATORY 3-LINE FORMAT - YOU MUST OUTPUT EXACTLY THIS:
+Line 1: CHECK: 0° is [distance]m, [< or >=] 1.5m
+Line 2: ACTION: [move_forward if >= 1.5m, otherwise turn_left or turn_right]
+Line 3: CONFIDENCE: 0.8
 
-EXAMPLES:
-- "Analyzing FULL_180_LIDAR_SCAN_DATA: Front obstructed at 0.34m, but angles 270°-350° show 1.70m-7.44m clearance. Since best path is at angles 225°-315° (back-right), turn_right to face the clear path" → ACTION: turn_right
-- "Examining complete scan: Angles 350°-10° show 2.8m (forward-right sector), angles 80°-120° show 1.8m (left sector). Best clearance is forward-right at 350°-10°, so move_forward toward the clear path" → ACTION: move_forward
-- "Reviewing 180-point scan: Angles 0°-90° obstructed at 0.8m, but angles 100°-160° show 3.5m clearance. Since best path is at angles 45°-135° (forward-left), turn_left to face the clear path" → ACTION: turn_left
+EXAMPLES (COPY THIS FORMAT EXACTLY):
+CHECK: 0° is 2.5m, >= 1.5m
+ACTION: move_forward
+CONFIDENCE: 0.8
 
-Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the analysis-strategy-confidence format above]"""
+CHECK: 0° is 0.93m, < 1.5m
+ACTION: turn_right
+CONFIDENCE: 0.8
+
+CHECK: 0° is 1.2m, < 1.5m  
+ACTION: turn_left
+CONFIDENCE: 0.8
+
+DO NOT WRITE ANYTHING ELSE. JUST THESE 3 LINES."""
             
-            self.get_logger().debug("   └── Running Qwen2.5-VL inference for navigation...")
+            model_short_name = self.model_name.split('/')[-1]
+            self.get_logger().debug(f"   └── Running {model_short_name} inference for navigation...")
             
             # Use proper chat template for compatibility
             messages = [
@@ -918,7 +931,7 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the anal
             )
             
             # Process inputs with speed optimization
-            self.get_logger().debug("   └── Processing inputs with Qwen2.5-VL processor...")
+            self.get_logger().debug(f"   └── Processing inputs with {model_short_name} processor...")
             
             # Resize image for faster processing
             if image.size[0] > self.max_image_size or image.size[1] > self.max_image_size:
@@ -1066,27 +1079,31 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the anal
                 try:
                     action_split = response_upper.split("ACTION:")
                     if len(action_split) > 1:
-                        action_part = action_split[1].split("|")[0].strip()
-                        self.get_logger().info(f"   └── PARSING: Found ACTION: '{action_part}'")
+                        # CRITICAL FIX: Only get the FIRST LINE after ACTION:, not the entire rest of the text
+                        # Split by newline to isolate the action line from reasoning
+                        first_line = action_split[1].split("\n")[0].split("\r")[0].strip()
+                        # Also split by CONFIDENCE: in case it's all on one line
+                        action_part = first_line.split("CONFIDENCE")[0].strip()
+                        self.get_logger().info(f"   └── PARSING: Found ACTION: '{action_part}' (first line only)")
                     else:
                         action_part = ""
                         self.get_logger().warn("   └── PARSING: ACTION: found but no content after it")
                 except (IndexError, AttributeError) as e:
                     self.get_logger().warn(f"   └── PARSING: Error parsing ACTION: {e}")
                     action_part = ""
-                if "MOVE_FORWARD" in action_part:
+                if "MOVE_FORWARD" in action_part or "MOVE FORWARD" in action_part:
                     action = "move_forward"
                     self.get_logger().info("   └── PARSING: Detected MOVE_FORWARD action")
-                elif "TURN_LEFT" in action_part:
+                elif "TURN_LEFT" in action_part or "TURN LEFT" in action_part:
                     action = "turn_left"
                     self.get_logger().info("   └── PARSING: Detected TURN_LEFT action")
-                elif "TURN_RIGHT" in action_part:
+                elif "TURN_RIGHT" in action_part or "TURN RIGHT" in action_part:
                     action = "turn_right"
                     self.get_logger().info("   └── PARSING: Detected TURN_RIGHT action")
-                elif "STRAFE_LEFT" in action_part:
+                elif "STRAFE_LEFT" in action_part or "STRAFE LEFT" in action_part:
                     action = "strafe_left"
                     self.get_logger().info("   └── PARSING: Detected STRAFE_LEFT action")
-                elif "STRAFE_RIGHT" in action_part:
+                elif "STRAFE_RIGHT" in action_part or "STRAFE RIGHT" in action_part:
                     action = "strafe_right"
                     self.get_logger().info("   └── PARSING: Detected STRAFE_RIGHT action")
                 elif "STOP" in action_part:
@@ -1131,30 +1148,23 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the anal
                         action = "stop"
                         self.get_logger().info("   └── PARSING: Detected STOP action")
                     else:
-                        self.get_logger().warn(f"   └── PARSING: Unknown action in BEST ACTION IS: '{action_part}'")
+                        self.get_logger().error(f"   └── PARSING ERROR: Unknown action in BEST ACTION IS: '{action_part}'")
+                        self.get_logger().error("   └── VLM response must use proper ACTION: format")
+                        return {
+                            'action': 'stop',
+                            'confidence': 0.0,
+                            'reasoning': f"ERROR: Invalid action format in VLM response: {action_part}"
+                        }
                 else:
-                    # Fallback: Try simple keyword detection
-                    self.get_logger().warn("   └── PARSING: No ACTION: or BEST ACTION IS found, trying keyword detection")
-                    if "MOVE_FORWARD" in response_upper or "FORWARD" in response_upper:
-                        action = "move_forward"
-                        self.get_logger().info("   └── PARSING: Keyword detected MOVE_FORWARD")
-                    elif "STRAFE_LEFT" in response_upper:
-                        action = "strafe_left"
-                        self.get_logger().info("   └── PARSING: Keyword detected STRAFE_LEFT")
-                    elif "STRAFE_RIGHT" in response_upper:
-                        action = "strafe_right"
-                        self.get_logger().info("   └── PARSING: Keyword detected STRAFE_RIGHT")
-                    elif "TURN_LEFT" in response_upper or ("LEFT" in response_upper and "TURN" not in response_upper):
-                        action = "turn_left"
-                        self.get_logger().info("   └── PARSING: Keyword detected TURN_LEFT")
-                    elif "TURN_RIGHT" in response_upper or ("RIGHT" in response_upper and "TURN" not in response_upper):
-                        action = "turn_right"
-                        self.get_logger().info("   └── PARSING: Keyword detected TURN_RIGHT")
-                    elif "STOP" in response_upper:
-                        action = "stop"
-                        self.get_logger().info("   └── PARSING: Keyword detected STOP")
-                    else:
-                        self.get_logger().warn("   └── PARSING: No recognized action keywords found")
+                    # No ACTION: or BEST ACTION IS found - this is an error
+                    self.get_logger().error("   └── PARSING ERROR: VLM response missing required ACTION: or BEST ACTION IS prefix")
+                    self.get_logger().error(f"   └── Response was: {response_text[:200]}")
+                    self.get_logger().error("   └── VLM must respond with proper format: ACTION: [action] or BEST ACTION IS [action]")
+                    return {
+                        'action': 'stop',
+                        'confidence': 0.0,
+                        'reasoning': "ERROR: VLM response missing required ACTION: format"
+                    }
             
             self.get_logger().debug(f"   └── PARSING: Final action: '{action}'")
             
@@ -1256,18 +1266,30 @@ Respond with: ACTION: [action] CONFIDENCE: [0.1-0.9] REASONING: [Follow the anal
                         self.get_logger().info(f"   └── PARSING: Found BECAUSE format: '{reasoning}'")
                 else:
                     # Try to find any reasoning-like content
-                    self.get_logger().warn(f"   └── PARSING: No standard reasoning format found in response")
+                    self.get_logger().info(f"   └── PARSING: No standard reasoning format found in response")
+                    # Check if there's a CHECK: line for the new simplified format
+                    if "CHECK:" in response_upper:
+                        # Extract the CHECK line as reasoning
+                        check_line = response_text.split("CHECK:")[1].split("\n")[0].strip() if "CHECK:" in response_text else ""
+                        reasoning = f"CHECK: {check_line}" if check_line else "Navigation decision based on sensor data"
+                        self.get_logger().info(f"   └── PARSING: Using CHECK line as reasoning: '{reasoning}'")
                     # Look for common reasoning keywords
-                    if "because" in response_text.lower():
+                    elif "because" in response_text.lower():
                         because_idx = response_text.lower().find("because")
                         reasoning = response_text[because_idx:].strip()
                         reasoning = reasoning.split(".")[0] if "." in reasoning else reasoning
                         self.get_logger().info(f"   └── PARSING: Extracted reasoning from 'because': '{reasoning}'")
                     else:
-                        self.get_logger().warn(f"   └── PARSING: No reasoning keywords found, using fallback")
+                        # Accept responses without explicit reasoning for simplified format
+                        reasoning = "Navigation decision based on LiDAR analysis"
+                        self.get_logger().info(f"   └── PARSING: No reasoning provided, using default")
             except (IndexError, AttributeError) as e:
-                self.get_logger().warn(f"   └── PARSING: Error extracting reasoning: {e}")
-                reasoning = "VLM navigation decision"
+                self.get_logger().error(f"   └── PARSING ERROR: Failed to extract reasoning: {e}")
+                return {
+                    'action': 'stop',
+                    'confidence': 0.0,
+                    'reasoning': f"ERROR: Reasoning extraction failed: {e}"
+                }
             
             # Check for reasoning-action consistency
             reasoning_lower = reasoning.lower()

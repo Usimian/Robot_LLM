@@ -107,8 +107,7 @@ Robot_LLM/
 │       ├── launch/
 │       │   └── client_system.launch.py
 │       └── robot_vila_system/
-│           ├── gateway_validator_node.py    # Communication gateway
-│           ├── robot_gui_node.py            # Tkinter GUI
+│           ├── robot_gui_node.py            # Tkinter GUI (publishes cmd_vel)
 │           ├── local_vlm_navigation_node.py # RoboMP2 VLM node
 │           ├── gui_components.py            # GUI widgets
 │           ├── gui_config.py                # GUI configuration
@@ -125,17 +124,19 @@ Robot_LLM/
 ### ROS2-Only Messaging
 All communications use ROS2 topics and services. HTTP and WebSockets are **strictly prohibited**.
 
-### Gateway Pattern
-All robot communications flow through a **single gateway** (`gateway_validator_node.py`):
-- Validates all commands before execution
-- Provides centralized logging and monitoring
-- Ensures command safety and consistency
+### Standard ROS2 Pattern
+The system uses **standard ROS2 messaging patterns**:
+- GUI publishes velocity commands directly to `/cmd_vel` (standard `geometry_msgs/Twist`)
+- Robot hardware interfaces subscribe to `/cmd_vel` for movement control
+- Sensor data published on standard ROS2 topics (`/scan`, `/imu/data_raw`, etc.)
 
 ### Key Topics & Services
-- `/cmd_vel` - Velocity commands (never published to directly)
-- `/scan` - Lidar data access
+- `/cmd_vel` - Velocity commands (`geometry_msgs/Twist` - standard ROS2 message)
+- `/scan` - Lidar data (`sensor_msgs/LaserScan`)
+- `/imu/data_raw` - IMU data (`sensor_msgs/Imu`)
+- `/realsense/camera/color/image_raw` - Camera feed (`sensor_msgs/Image`)
 - `/vlm/analyze_scene` - VLM scene analysis service
-- Custom message types defined in `robot_msgs` package
+- Custom message types in `robot_msgs` for sensor telemetry
 
 ## 🛠️ Development Guidelines
 
@@ -160,10 +161,10 @@ All robot communications flow through a **single gateway** (`gateway_validator_n
   ```
 
 ### Communication Rules
-1. **Never** publish directly to `/cmd_vel` topic
-2. **Always** route commands through the gateway
-3. **Never** modify `SensorData` message definitions
-4. Access lidar values via `/scan` topic only
+1. **Use standard ROS2 messages** for robot control (`geometry_msgs/Twist` for `/cmd_vel`)
+2. **Never** modify standard sensor message definitions (`sensor_msgs/LaserScan`, etc.)
+3. Access lidar values via `/scan` topic only
+4. Use ROS2 topics and services exclusively (no HTTP/WebSockets)
 
 ### Process Management
 - Prefer manual process termination
@@ -215,18 +216,12 @@ ssh <user>@192.168.1.166
 - **ROS2 Distribution**: Humble (or compatible)
 - **License**: MIT
 
-## 🤝 Contributing
-When contributing to this project:
-1. Follow all development guidelines above
-2. Use ROS2 packages under `src/` directory
-3. Execute code via ROS2 launch files
-4. Ask for clarification when requirements are ambiguous
-5. Always check terminal output for errors
+**Last Updated**: October 29, 2025
 
-## 📧 Contact
-Maintainer: Robot Developer (robot@example.com)
+## 🔄 Recent Updates
 
----
-
-**Last Updated**: October 26, 2025
-
+### October 29, 2025 - Standard ROS2 Architecture
+- **Migration to standard ROS2 patterns**: GUI now publishes directly to `/cmd_vel` using `geometry_msgs/Twist`
+- **Removed custom gateway**: Eliminated `gazebo_command_gateway.py` and `gateway_validator_node.py`
+- **Standard message flow**: GUI → `/cmd_vel` → Robot/Simulator (standard ROS2 practice)
+- **Benefits**: Better compatibility with ROS2 ecosystem, easier integration with nav2, standard tooling support

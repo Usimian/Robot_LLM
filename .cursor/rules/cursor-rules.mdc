@@ -8,14 +8,15 @@ alwaysApply: true
 
 ### 🏗️ **Architecture**
 - **System Type**: Client/Server ROS2 system
-- **Client**: AMD64 Ubuntu 22.04 PC (Python/Tkinter/ROS2) - *This workspace*
+- **Client**: AMD64 Ubuntu 24.04 PC (Python/Tkinter/ROS2) - *This workspace*
 - **Robot**: Jetson Orin Nano at 192.168.1.166 (SSH connection)
 - **Hardware**: RGB camera, depth camera, IMU, lidar, mecanum wheel odometry
+- **Simulation**: A gazebo sim environment may be used for developemnt and testing.
 
 ### 📡 **Communication Rules**
 - **Messaging**: ROS2 nodes and topics only (no HTTP/WebSockets)
+- **Standard ROS2**: Use standard messages (`geometry_msgs/Twist` for cmd_vel)
 - **Initiation**: All robot communications requested by client
-- **Gateway**: Single code point for all robot communications
 
 ### 🔧 **Development Standards**
 - **Build**: ROS2 packages without `--symlink-install`
@@ -31,9 +32,13 @@ alwaysApply: true
 - **Clarification**: Ask when requirements are ambiguous
 
 ### 🚫 **Prohibited Actions**
-- Direct publishing to `/cmd_vel` topic
-- Modifying SensorData message definitions
+- Modifying standard sensor message definitions (`sensor_msgs/LaserScan`, etc.)
 - Creating simulated or mock data
 - Using HTTP/WebSockets for communication
 - Automatic process termination
 - Fallback implementations
+
+### ✅ **Standard Practices**
+- **Movement Control**: GUI publishes `geometry_msgs/Twist` to `/cmd_vel`
+- **Sensor Data**: Subscribe to standard ROS2 topics (`/scan`, `/imu/data_raw`, etc.)
+- **Integration**: Compatible with standard ROS2 navigation stack (nav2)

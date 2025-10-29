@@ -33,9 +33,7 @@ setup(
     entry_points={
         'console_scripts': [
             'robot_gui_node.py = robot_vila_system.robot_gui_node:main',
-            'gateway_validator_node.py = robot_vila_system.gateway_validator_node:main',
             'local_vlm_navigation_node.py = robot_vila_system.local_vlm_navigation_node:main',
-
         ],
     },
 )

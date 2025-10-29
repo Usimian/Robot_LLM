@@ -30,7 +30,7 @@ class GUIConfig:
     STATUS_PANEL_HEIGHT = 120
     
     # LiDAR display settings
-    LIDAR_MAX_RANGE = 2.5  # Maximum LiDAR range in meters
+    LIDAR_MAX_RANGE = 5.0  # Maximum LiDAR range in meters
 
     # LiDAR scan quantization settings
     LIDAR_SCAN_QUANTIZATION_DEGREES = 3  # Degrees per scan point (1 = 360 points, 2 = 180 points)
@@ -45,12 +45,18 @@ class GUIConfig:
     UPDATE_INTERVAL_MS = 1000  # 1 second
     ROS_START_DELAY_MS = 500   # 0.5 seconds
 
+    # Movement duration settings (milliseconds)
+    # These control how long autonomous movements execute before auto-stopping
+    TURN_DURATION_MS = 500      # 0.5 seconds for turns (~45° at 0.5 rad/s)
+    STRAFE_DURATION_MS = 300    # 0.3 seconds for strafing
+    LINEAR_DURATION_MS = 800    # 0.8 seconds for forward/backward movement
+
     # VILA settings
     DEFAULT_VILA_PROMPT = "Analyze the current camera view for navigation."
-    VLM_AUTO_INTERVAL = 3.0  # seconds
+    VLM_AUTO_INTERVAL = 3.0  # seconds (should be > max movement duration)
 
     # Model settings
-    DEFAULT_VLM_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
+    DEFAULT_VLM_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 
     # QoS settings
     IMAGE_QOS_DEPTH = 10
