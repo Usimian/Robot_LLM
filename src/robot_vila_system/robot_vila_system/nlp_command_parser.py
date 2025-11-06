@@ -279,10 +279,24 @@ Output:"""
         """
         # Try to find JSON object in response
         start_idx = text.find('{')
-        end_idx = text.rfind('}')
 
-        if start_idx == -1 or end_idx == -1:
+        if start_idx == -1:
             raise ValueError(f"No JSON object found in response: {text}")
+
+        # Find the matching closing brace
+        brace_count = 0
+        end_idx = -1
+        for i in range(start_idx, len(text)):
+            if text[i] == '{':
+                brace_count += 1
+            elif text[i] == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    end_idx = i
+                    break
+
+        if end_idx == -1:
+            raise ValueError(f"No matching closing brace found in response: {text}")
 
         json_str = text[start_idx:end_idx + 1]
 
@@ -332,7 +346,7 @@ Output:"""
         needs_vision = parsed_json.get('needs_vision', False)
 
         # Confidence (default to high for valid parses)
-        confidence = 0.95 if action != 'stop' else 0.5
+        confidence = 0.95
 
         return ParsedCommand(
             action=action,

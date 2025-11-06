@@ -89,6 +89,10 @@ def test_nlp_parser():
                 print(f"    Vision:     {result.needs_vision}")
                 print(f"    Confidence: {result.confidence:.2f}")
 
+                # Debug: Show raw response if there's an error
+                if result.confidence == 0.0:
+                    print(f"    Raw Response: {result.raw_response[:200]}")
+
                 # Basic validation
                 if result.action and result.confidence > 0.5:
                     passed_tests += 1
