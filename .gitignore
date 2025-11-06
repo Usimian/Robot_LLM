@@ -79,6 +79,10 @@ venv.bak/
 *.swo
 *~
 
+# VSCode - ignore all files except .json
+.vscode/*
+!.vscode/*.json
+
 # macOS
 .DS_Store
 .AppleDouble
