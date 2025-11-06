@@ -222,56 +222,67 @@ class RobotGUIROS2Node(Node):
         # Parse command type and set velocities
         if command_type == 'move_forward':
             speed = parameters.get('speed', self.linear_speed) if parameters else self.linear_speed
+            distance = parameters.get('distance', 0.5) if parameters else 0.5  # Default 0.5m
             twist.linear.x = speed
             twist.linear.y = 0.0
             twist.angular.z = 0.0
-            # 0.5m forward movement: distance = speed × time → 0.5m = 0.5m/s × 1.0s
-            duration_sec = 1.0
-            self.get_logger().info(f"   └── Moving forward 0.5m over {duration_sec:.2f}s")
-            
+            # Calculate duration: time = distance / speed
+            duration_sec = distance / speed
+            self.get_logger().info(f"   └── Moving forward {distance}m at {speed}m/s over {duration_sec:.2f}s")
+
         elif command_type == 'move_backward':
             speed = parameters.get('speed', self.linear_speed) if parameters else self.linear_speed
+            distance = parameters.get('distance', 0.5) if parameters else 0.5  # Default 0.5m
             twist.linear.x = -speed
             twist.linear.y = 0.0
             twist.angular.z = 0.0
-            duration_sec = 1.0
-            self.get_logger().info(f"   └── Moving backward 0.5m over {duration_sec:.2f}s")
-            
+            # Calculate duration: time = distance / speed
+            duration_sec = distance / speed
+            self.get_logger().info(f"   └── Moving backward {distance}m at {speed}m/s over {duration_sec:.2f}s")
+
         elif command_type == 'turn_left':
             angular_speed = parameters.get('speed', self.angular_speed) if parameters else self.angular_speed
+            import math
+            angle_rad = parameters.get('angle', math.pi / 4.0) if parameters else math.pi / 4.0  # Default 45°
             twist.linear.x = 0.0
             twist.linear.y = 0.0
             twist.angular.z = angular_speed
-            # 45-degree turn: angle_rad = angular_speed × time
-            import math
-            angle_rad = math.pi / 4.0  # 45 degrees
+            # Calculate duration: time = angle / angular_speed
             duration_sec = angle_rad / abs(angular_speed)
-            self.get_logger().info(f"   └── Turning left 45° over {duration_sec:.2f}s")
-            
+            angle_deg = math.degrees(angle_rad)
+            self.get_logger().info(f"   └── Turning left {angle_deg:.1f}° at {angular_speed}rad/s over {duration_sec:.2f}s")
+
         elif command_type == 'turn_right':
             angular_speed = parameters.get('speed', self.angular_speed) if parameters else self.angular_speed
+            import math
+            angle_rad = parameters.get('angle', math.pi / 4.0) if parameters else math.pi / 4.0  # Default 45°
             twist.linear.x = 0.0
             twist.linear.y = 0.0
             twist.angular.z = -angular_speed
-            # 45-degree turn
-            import math
-            angle_rad = math.pi / 4.0  # 45 degrees
+            # Calculate duration: time = angle / angular_speed
             duration_sec = angle_rad / abs(angular_speed)
-            self.get_logger().info(f"   └── Turning right 45° over {duration_sec:.2f}s")
-            
+            angle_deg = math.degrees(angle_rad)
+            self.get_logger().info(f"   └── Turning right {angle_deg:.1f}° at {angular_speed}rad/s over {duration_sec:.2f}s")
+
         elif command_type == 'strafe_left':
             speed = parameters.get('speed', self.strafe_speed) if parameters else self.strafe_speed
+            distance = parameters.get('distance', 0.5) if parameters else 0.5  # Default 0.5m
             twist.linear.x = 0.0
             twist.linear.y = speed
             twist.angular.z = 0.0
-            duration_sec = 1.0
-            
+            # Calculate duration: time = distance / speed
+            duration_sec = distance / speed
+            self.get_logger().info(f"   └── Strafing left {distance}m at {speed}m/s over {duration_sec:.2f}s")
+
         elif command_type == 'strafe_right':
             speed = parameters.get('speed', self.strafe_speed) if parameters else self.strafe_speed
+            distance = parameters.get('distance', 0.5) if parameters else 0.5  # Default 0.5m
             twist.linear.x = 0.0
             twist.linear.y = -speed
             twist.angular.z = 0.0
-            duration_sec = 1.0
+            # Calculate duration: time = distance / speed
+            duration_sec = distance / speed
+            self.get_logger().info(f"   └── Strafing right {distance}m at {speed}m/s over {duration_sec:.2f}s")
             
         elif command_type in ['stop', 'emergency_stop']:
             twist.linear.x = 0.0
@@ -579,7 +590,8 @@ class RobotGUIROS2:
                     return
             self.log_message(f"🤖 Sending movement command: {command}")
             # Queue command for execution on GUI thread (prevents segfault)
-            self.root.after(0, lambda: self.ros_node.send_robot_command(command))
+            # Use default argument to capture command value immediately
+            self.root.after(0, lambda cmd=command: self.ros_node.send_robot_command(cmd))
         elif isinstance(command, tuple) and len(command) == 2 and command[0] == 'safety_toggle':
             # Safety toggle command
             command_type, is_enabled = command
@@ -949,28 +961,41 @@ class RobotGUIROS2:
                                 if hasattr(self, 'vlm_panel'):
                                     self.vlm_panel.update_analysis_result(vlm_result)
                                 
-                                # EXECUTE THE RECOMMENDED ACTION (if auto-execute enabled)
-                                # Synchronous execution: analyze → move → wait → repeat
-                                if self.auto_execute_enabled:
-                                    self.log_message(f"🤖 Checking execution conditions - action: {action}, confidence: {confidence:.2f}")
-                                    if action != "stop" and confidence > 0.4:
-                                        if self.movement_enabled:
-                                            # Check if movement is already in progress
-                                            if self.ros_node.movement_in_progress:
-                                                self.log_message(f"⏸️ Movement in progress, will re-analyze after completion")
-                                            else:
-                                                self.log_message(f"🤖 Executing: {action} (confidence: {confidence:.2f})")
-                                                # Execute command (will block new commands until complete)
-                                                self.root.after(0, lambda: self.ros_node.send_robot_command(action))
-                                                # Next analysis will be triggered by movement_complete callback
-                                        else:
-                                            self.log_message(f"🔒 Movement disabled - VLM recommended: {action}")
-                                    else:
-                                        self.log_message(f"🛑 VLM recommends: {action} (confidence: {confidence:.2f})")
-                                        if action == "stop":
-                                            self.root.after(0, lambda: self.ros_node.send_robot_command("stop"))
+                                # Check if this is an informational response (no movement)
+                                is_informational = result_data.get('is_informational', False)
+                                # Extract movement parameters (distance, angle, speed) if present
+                                movement_params = result_data.get('parameters', {})
+
+                                if is_informational or action == 'none':
+                                    # This is an informational query - just display the response
+                                    self.log_message(f"ℹ️ VLM Response: {reasoning}")
+                                    # Don't execute any movement for informational queries
                                 else:
-                                    self.log_message(f"📋 VLM recommends: {action} (confidence: {confidence:.2f}) - Auto-execute disabled")
+                                    # EXECUTE THE RECOMMENDED ACTION (if auto-execute enabled)
+                                    # Synchronous execution: analyze → move → wait → repeat
+                                    if self.auto_execute_enabled:
+                                        param_str = f" with params {movement_params}" if movement_params else ""
+                                        self.log_message(f"🤖 Checking execution conditions - action: {action}{param_str}, confidence: {confidence:.2f}")
+                                        if action != "stop" and confidence > 0.4:
+                                            if self.movement_enabled:
+                                                # Check if movement is already in progress
+                                                if self.ros_node.movement_in_progress:
+                                                    self.log_message(f"⏸️ Movement in progress, will re-analyze after completion")
+                                                else:
+                                                    self.log_message(f"🤖 Executing: {action}{param_str} (confidence: {confidence:.2f})")
+                                                    # Execute command with parameters (will block new commands until complete)
+                                                    # Use default arguments to capture values immediately
+                                                    self.root.after(0, lambda act=action, params=movement_params: self.ros_node.send_robot_command(act, parameters=params))
+                                                    # Next analysis will be triggered by movement_complete callback
+                                            else:
+                                                self.log_message(f"🔒 Movement disabled - VLM recommended: {action}{param_str}")
+                                        else:
+                                            self.log_message(f"🛑 VLM recommends: {action} (confidence: {confidence:.2f})")
+                                            if action == "stop":
+                                                # "stop" is a string literal, safe to use directly
+                                                self.root.after(0, lambda: self.ros_node.send_robot_command("stop"))
+                                    else:
+                                        self.log_message(f"📋 VLM recommends: {action} (confidence: {confidence:.2f}) - Auto-execute disabled")
                                 
                                 self.log_message(f"✅ VLM analysis: {analysis_text}")
                                 if reasoning and reasoning != 'No reasoning provided':

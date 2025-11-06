@@ -28,19 +28,32 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     """Generate integrated launch description"""
-    
+
     # Get package directories
     robot_sim_dir = get_package_share_directory('robot_sim')
-    
+
+    # Declare launch argument for world selection
+    world_arg = DeclareLaunchArgument(
+        'world',
+        default_value='mecanum_working.sdf',
+        description='World file to load (mecanum_working.sdf or small_house.world)'
+    )
+
     # Paths
-    world_file = os.path.join(robot_sim_dir, 'worlds', 'mecanum_working.sdf')
+    world_file = PathJoinSubstitution([
+        robot_sim_dir,
+        'worlds',
+        LaunchConfiguration('world')
+    ])
     bridge_config = os.path.join(robot_sim_dir, 'config', 'bridge.yaml')
     
-    # Environment variables for NVIDIA GPU
+    # Environment variables for NVIDIA GPU and Gazebo models
+    models_path = os.path.join(robot_sim_dir, 'models')
     nvidia_env_vars = [
         SetEnvironmentVariable('__NV_PRIME_RENDER_OFFLOAD', '1'),
         SetEnvironmentVariable('__GLX_VENDOR_LIBRARY_NAME', 'nvidia'),
         SetEnvironmentVariable('__VK_LAYER_NV_optimus', 'NVIDIA_only'),
+        SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', models_path),
     ]
     
     # 1. Launch Gazebo with world
@@ -82,15 +95,17 @@ def generate_launch_description():
     )
     
     return LaunchDescription([
+        # Launch arguments
+        world_arg,
+
         *nvidia_env_vars,
-        
+
         # Status messages
         ExecuteProcess(cmd=['echo', '🚀 Launching Gazebo + robot_vila_system integration'], output='screen'),
-        ExecuteProcess(cmd=['echo', '   └── Gazebo simulation: mecanum_working.sdf'], output='screen'),
         ExecuteProcess(cmd=['echo', '   └── ROS-Gazebo bridge with topic remapping'], output='screen'),
         ExecuteProcess(cmd=['echo', '   └── GUI publishes standard cmd_vel messages'], output='screen'),
         ExecuteProcess(cmd=['echo', ''], output='screen'),
-        
+
         # Launch nodes
         gazebo,
         bridge,

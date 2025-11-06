@@ -535,19 +535,39 @@ class RoboMP2NavigationNode(Node):
             
                 # Run VLM inference with RAW LiDAR data (not processed/filtered)
                 navigation_result = self._run_vlm_navigation_inference(current_image, prompt, sensor_data, lidar_data)
-            
+
+                # Check if this is an informational query response
+                is_informational = navigation_result.get('is_informational', False)
+
                 # Format response with enhanced reasoning display
-                analysis_result = {
-                    'success': True,
-                    'analysis': f"VLM Decision: {navigation_result['action']} (confidence: {navigation_result['confidence']:.2f})",
-                    'reasoning': navigation_result['reasoning'],
-                    'full_analysis': f"Local VLM Analysis:\n• Action: {navigation_result['action']}\n• Confidence: {navigation_result['confidence']:.2f}\n• Reasoning: {navigation_result['reasoning']}\n• Raw Response: {navigation_result.get('vlm_response', 'N/A')}",
-                    'navigation_commands': {
-                        'action': navigation_result['action'],
-                        'confidence': navigation_result['confidence']
-                    },
-                    'confidence': navigation_result['confidence']
-                }
+                if is_informational:
+                    # For informational queries, format as description
+                    analysis_result = {
+                        'success': True,
+                        'analysis': navigation_result['reasoning'],
+                        'reasoning': navigation_result['reasoning'],
+                        'full_analysis': f"VLM Description:\n{navigation_result['reasoning']}",
+                        'navigation_commands': {
+                            'action': 'none',
+                            'confidence': 1.0
+                        },
+                        'confidence': 1.0,
+                        'is_informational': True
+                    }
+                else:
+                    # For navigation queries, format as navigation decision
+                    analysis_result = {
+                        'success': True,
+                        'analysis': f"VLM Decision: {navigation_result['action']} (confidence: {navigation_result['confidence']:.2f})",
+                        'reasoning': navigation_result['reasoning'],
+                        'full_analysis': f"Local VLM Analysis:\n• Action: {navigation_result['action']}\n• Confidence: {navigation_result['confidence']:.2f}\n• Reasoning: {navigation_result['reasoning']}\n• Raw Response: {navigation_result.get('vlm_response', 'N/A')}",
+                        'navigation_commands': {
+                            'action': navigation_result['action'],
+                            'confidence': navigation_result['confidence']
+                        },
+                        'confidence': navigation_result['confidence'],
+                        'is_informational': False
+                    }
 
                 # Pack response with enhanced reasoning
                 result_data = {
@@ -555,7 +575,9 @@ class RoboMP2NavigationNode(Node):
                     'reasoning': analysis_result['reasoning'],
                     'full_analysis': analysis_result['full_analysis'],
                     'navigation_commands': analysis_result['navigation_commands'],
-                    'confidence': analysis_result['confidence']
+                    'confidence': analysis_result['confidence'],
+                    'is_informational': is_informational,
+                    'parameters': navigation_result.get('parameters', {})  # Include parsed parameters if present
                 }
                 
                 response.success = True
@@ -624,10 +646,183 @@ class RoboMP2NavigationNode(Node):
             else:
                 return None
     
+    def _parse_movement_parameters(self, prompt: str, command_type: str) -> Dict[str, Any]:
+        """Parse movement parameters (distance, angle) from command string
+
+        Args:
+            prompt: Command string (e.g., "turn right 90 deg", "move forward 2m")
+            command_type: Command type (e.g., 'turn_right', 'move_forward')
+
+        Returns:
+            Dictionary with parsed parameters (distance, angle, speed)
+        """
+        import re
+
+        params = {}
+        prompt_lower = prompt.lower()
+
+        # Parse distance for linear movements (move_forward, move_backward, strafe)
+        if command_type in ['move_forward', 'move_backward', 'strafe_left', 'strafe_right']:
+            # Look for patterns like: "2m", "1.5 meters", "0.5 m", "50cm", "50 cm"
+            distance_patterns = [
+                r'(\d+\.?\d*)\s*m(?:eters?)?(?:\s|$)',  # 2m, 2 meters, 1.5m
+                r'(\d+\.?\d*)\s*cm(?:entimeters?)?(?:\s|$)',  # 50cm, 50 centimeters
+            ]
+
+            for pattern in distance_patterns:
+                match = re.search(pattern, prompt_lower)
+                if match:
+                    value = float(match.group(1))
+                    # Convert cm to meters
+                    if 'cm' in pattern:
+                        value = value / 100.0
+                    params['distance'] = value
+                    self.get_logger().info(f"   └── Parsed distance: {value:.2f}m")
+                    break
+
+        # Parse angle for turns (turn_left, turn_right)
+        elif command_type in ['turn_left', 'turn_right']:
+            # Look for patterns like: "90 deg", "45 degrees", "180°", "1.57 rad"
+            angle_patterns = [
+                r'(\d+\.?\d*)\s*(?:deg|degree)s?(?:\s|$)',  # 90 deg, 45 degrees
+                r'(\d+\.?\d*)\s*°',  # 90°
+                r'(\d+\.?\d*)\s*rad(?:ians?)?(?:\s|$)',  # 1.57 rad, 1.57 radians
+            ]
+
+            for pattern in angle_patterns:
+                match = re.search(pattern, prompt_lower)
+                if match:
+                    value = float(match.group(1))
+                    # Convert to radians if needed
+                    if 'rad' in pattern:
+                        angle_rad = value
+                    else:
+                        # Degrees to radians
+                        import math
+                        angle_rad = math.radians(value)
+                    params['angle'] = angle_rad
+                    self.get_logger().info(f"   └── Parsed angle: {value}° = {angle_rad:.3f} rad")
+                    break
+
+        # Parse speed if specified (optional for all movement types)
+        speed_patterns = [
+            r'(\d+\.?\d*)\s*m/s(?:\s|$)',  # 0.5 m/s
+            r'at\s+(\d+\.?\d*)\s*(?:m/s|meters?\s+per\s+second)',  # at 0.5 m/s
+        ]
+
+        for pattern in speed_patterns:
+            match = re.search(pattern, prompt_lower)
+            if match:
+                params['speed'] = float(match.group(1))
+                self.get_logger().info(f"   └── Parsed speed: {params['speed']:.2f} m/s")
+                break
+
+        return params
+
+    def _is_direct_command(self, prompt: str) -> tuple[bool, str, Dict[str, Any]]:
+        """Check if prompt is a direct movement command (e.g., 'move forward', 'turn left')
+
+        Returns:
+            (is_direct_command, command_type, parameters)
+            e.g., (True, 'move_forward', {'distance': 2.0})
+        """
+        prompt_lower = prompt.lower().strip()
+
+        # Direct command mappings - ordered from most specific to least specific
+        # This prevents "right" from matching "turn right 90 deg"
+        direct_commands = [
+            ('move forward', 'move_forward'),
+            ('go forward', 'move_forward'),
+            ('move backward', 'move_backward'),
+            ('move back', 'move_backward'),
+            ('go back', 'move_backward'),
+            ('turn left', 'turn_left'),
+            ('rotate left', 'turn_left'),
+            ('turn right', 'turn_right'),
+            ('rotate right', 'turn_right'),
+            ('strafe left', 'strafe_left'),
+            ('strafe right', 'strafe_right'),
+            # Single word commands only match if they're the ENTIRE prompt (prevent false matches)
+            ('forward', 'move_forward'),
+            ('backward', 'move_backward'),
+            ('reverse', 'move_backward'),
+            ('left', 'turn_left'),
+            ('right', 'turn_right'),
+            ('stop', 'stop'),
+            ('halt', 'stop')
+        ]
+
+        for phrase, command in direct_commands:
+            # For single-word commands, only match if it's the entire prompt
+            if len(phrase.split()) == 1:
+                if prompt_lower == phrase:
+                    params = self._parse_movement_parameters(prompt, command)
+                    return True, command, params
+            else:
+                # For multi-word commands, match if phrase is in prompt
+                if phrase in prompt_lower:
+                    params = self._parse_movement_parameters(prompt, command)
+                    return True, command, params
+
+        return False, None, {}
+
+    def _is_informational_query(self, prompt: str) -> bool:
+        """Detect if the query is informational (description) vs navigational (movement)
+
+        Strategy: Default to informational UNLESS explicit movement/navigation keywords are found.
+        This is safer and more intuitive - user must explicitly request movement.
+        """
+        # First check if it's a direct command
+        is_direct, _, _ = self._is_direct_command(prompt)
+        if is_direct:
+            return False  # Direct commands are not informational
+
+        # Navigation/movement keywords for goal-based navigation (e.g., "navigate to the door")
+        navigation_keywords = [
+            'navigate to', 'go to', 'drive to', 'travel to', 'head to',
+            'approach', 'reach', 'get to'
+        ]
+
+        prompt_lower = prompt.lower()
+
+        # If ANY navigation keyword is found, it's a navigation query
+        has_navigation = any(keyword in prompt_lower for keyword in navigation_keywords)
+
+        if has_navigation:
+            self.get_logger().debug(f"   └── Navigation keyword detected in: '{prompt}'")
+            return False  # Not informational - it's navigation
+        else:
+            self.get_logger().debug(f"   └── No navigation keywords - treating as informational: '{prompt}'")
+            return True   # Default to informational
+
     def _run_vlm_navigation_inference(self, image: Optional[Image.Image], prompt: str, sensor_data: Dict[str, float], lidar_data: Optional[Dict[str, Any]] = None, raw_lidar_msg: Optional[object] = None) -> Dict[str, Any]:
         """Run RoboMP2-enhanced VLM inference for navigation decisions"""
         start_time = time.time()
         inference_timeout = 2.0  # 2-second timeout for ultra-fast response
+
+        # Check if this is a direct command (e.g., "move forward", "turn left")
+        is_direct, direct_command, params = self._is_direct_command(prompt)
+        if is_direct:
+            self.get_logger().info(f"🎮 Detected DIRECT COMMAND: {prompt} → {direct_command}")
+            if params:
+                self.get_logger().info(f"   └── Parameters: {params}")
+            # Return direct command without VLM processing
+            return {
+                'action': direct_command,
+                'confidence': 1.0,
+                'reasoning': f'Direct user command: {prompt}',
+                'vlm_response': f'Executing direct command: {direct_command}',
+                'is_informational': False,
+                'parameters': params  # Include parsed parameters
+            }
+
+        # Check if this is an informational query
+        is_informational = self._is_informational_query(prompt)
+        if is_informational:
+            self.get_logger().info(f"📝 Detected INFORMATIONAL query: {prompt}")
+        else:
+            self.get_logger().info(f"🧭 Detected NAVIGATION query: {prompt}")
+
         try:
             # RoboMP2 Enhancement: Extract environment state using GCMP
             current_state = None
@@ -834,9 +1029,26 @@ class RoboMP2NavigationNode(Node):
             # DEBUG: Log what data we're sending to VLM
             self.get_logger().info(f"   └── VLM INPUT DATA: Camera + 360° LiDAR scan")
             self.get_logger().info(f"   └── DEBUG SENSOR_INFO: {sensor_info}")
-            
-            # Navigation prompt - CONCISE format to avoid token waste
-            navigation_prompt = f"""Robot navigation decision required. Camera + LiDAR scan provided.
+
+            # Generate different prompts based on query type
+            if is_informational:
+                # Informational prompt - focus on description, no movement required
+                navigation_prompt = f"""You are a robot vision system. Analyze what you see in the camera image and answer the user's question.
+
+USER QUESTION: {prompt}
+
+Provide a clear, concise description of what you observe. Focus on:
+- Objects and their locations
+- Colors, sizes, and distinctive features
+- Spatial relationships
+- Any relevant details to answer the question
+
+DO NOT provide movement commands. Just describe what you see.
+
+Your response should be conversational and informative."""
+            else:
+                # Navigation prompt - CONCISE format to avoid token waste
+                navigation_prompt = f"""Robot navigation decision required. Camera + LiDAR scan provided.
 
 SENSOR DATA: {sensor_info}
 TASK: {prompt}
@@ -996,16 +1208,29 @@ DO NOT WRITE ANYTHING ELSE. JUST THESE 3 LINES."""
             self.get_logger().debug(f"   └── Response length: {len(response_text)} characters")
             self.get_logger().info(f"   └── DEBUG: Full VLM response for parsing: '{response_text}'")
 
-            # DEBUG: Check for turn-related keywords in response
-            turn_keywords = ['TURN_LEFT', 'TURN_RIGHT', 'turn_left', 'turn_right', 'STRAFE_LEFT', 'STRAFE_RIGHT', 'strafe_left', 'strafe_right']
-            found_turn_keywords = [kw for kw in turn_keywords if kw in response_text]
-            if found_turn_keywords:
-                self.get_logger().info(f"   └── TURN KEYWORDS FOUND: {found_turn_keywords}")
+            # Handle informational vs navigation responses differently
+            if is_informational:
+                # For informational queries, return the description without movement
+                self.get_logger().info(f"   └── Processing INFORMATIONAL response")
+                navigation_result = {
+                    'action': 'none',  # Special action type for informational queries
+                    'confidence': 1.0,
+                    'reasoning': response_text,  # The full description
+                    'vlm_response': response_text,
+                    'is_informational': True
+                }
             else:
-                self.get_logger().warn("   └── NO TURN KEYWORDS FOUND in VLM response - this explains why no turns!")
-            
-            # Parse navigation decision from response
-            navigation_result = self._parse_vlm_response(response_text, sensor_data)
+                # DEBUG: Check for turn-related keywords in response
+                turn_keywords = ['TURN_LEFT', 'TURN_RIGHT', 'turn_left', 'turn_right', 'STRAFE_LEFT', 'STRAFE_RIGHT', 'strafe_left', 'strafe_right']
+                found_turn_keywords = [kw for kw in turn_keywords if kw in response_text]
+                if found_turn_keywords:
+                    self.get_logger().info(f"   └── TURN KEYWORDS FOUND: {found_turn_keywords}")
+                else:
+                    self.get_logger().warn("   └── NO TURN KEYWORDS FOUND in VLM response - this explains why no turns!")
+
+                # Parse navigation decision from response
+                navigation_result = self._parse_vlm_response(response_text, sensor_data)
+                navigation_result['is_informational'] = False
             
             # Safety check - ensure we got a valid result
             if navigation_result is None:

@@ -1,0 +1,12 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/home/marc/Robot_LLM/install/robot_vila_system/lib/python3.12/site-packages",
+        "/home/marc/Robot_LLM/install/robot_msgs/lib/python3.12/site-packages",
+        "/opt/ros/jazzy/lib/python3.12/site-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/marc/Robot_LLM/install/robot_vila_system/lib/python3.12/site-packages",
+        "/home/marc/Robot_LLM/install/robot_msgs/lib/python3.12/site-packages",
+        "/opt/ros/jazzy/lib/python3.12/site-packages"
+    ]
+}
