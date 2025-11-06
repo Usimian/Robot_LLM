@@ -341,13 +341,25 @@ class RobotGUIROS2:
     """Main GUI class using component-based architecture"""
     
     def __init__(self, root, logger=None):
-        self.logger = logger
-        self.logger.debug(f"🔧 DEBUG: RobotGUIROS2.__init__ entered")
         self.root = root
+
+        # Create logger if none provided
+        if logger is None:
+            import logging
+            self.logger = logging.getLogger('RobotGUIROS2')
+            self.logger.setLevel(logging.INFO)
+            if not self.logger.handlers:
+                handler = logging.StreamHandler()
+                handler.setFormatter(logging.Formatter('[%(name)s] %(levelname)s: %(message)s'))
+                self.logger.addHandler(handler)
+        else:
+            self.logger = logger
+
+        self.logger.debug(f"🔧 DEBUG: RobotGUIROS2.__init__ entered")
 
         # Use configuration constants
         self.base_title = GUIConfig.WINDOW_TITLE
-        
+
         # Defer ROS2 initialization until after GUI is created
         self.ros_node = None
         self.logger.debug(f"🔧 ROS2 initialization deferred until after GUI creation")
