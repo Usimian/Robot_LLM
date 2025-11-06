@@ -97,13 +97,24 @@ class NLPCommandParser:
             )
 
             # Load model with optimization
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                device_map=self.device,
-                trust_remote_code=True,
-                low_cpu_mem_usage=True
-            )
+            if self.device == "cuda":
+                # Use device_map for CUDA (automatically handles placement)
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name,
+                    torch_dtype=torch.float16,
+                    device_map="auto",  # Let transformers handle device placement
+                    trust_remote_code=True,
+                    low_cpu_mem_usage=True
+                )
+            else:
+                # For CPU, load normally
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name,
+                    torch_dtype=torch.float32,
+                    trust_remote_code=True,
+                    low_cpu_mem_usage=True
+                )
+                self.model = self.model.to(self.device)
 
             self.model.eval()
 
