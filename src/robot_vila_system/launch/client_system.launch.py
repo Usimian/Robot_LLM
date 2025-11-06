@@ -61,8 +61,8 @@ def generate_launch_description():
 
     world_arg = DeclareLaunchArgument(
         'world',
-        default_value='mecanum_working.sdf',
-        description='World file to load (mecanum_working.sdf or small_house.world)'
+        default_value='small_house.world',
+        description='World file to load (small_house.world or mecanum_working.sdf)'
     )
 
     # Get launch configurations
