@@ -1,6 +1,6 @@
 # Robot LLM System
 
-A ROS2-based robot control system featuring vision-language model (VLM) integration with RoboMP2 navigation capabilities. This system enables natural language robot control through a Tkinter GUI interface, leveraging Qwen2.5-VL for advanced scene understanding and navigation.
+A ROS2-based robot control system featuring vision-language model (VLM) integration with RoboMP2 navigation capabilities and advanced natural language command parsing. This system enables flexible natural language robot control through a Tkinter GUI interface, leveraging Qwen2.5-VL for advanced scene understanding and Qwen2.5-3B-Instruct for robust command parsing.
 
 ## 🏗️ System Architecture
 
@@ -9,6 +9,7 @@ A ROS2-based robot control system featuring vision-language model (VLM) integrat
   - Python/Tkinter GUI interface
   - ROS2 node infrastructure
   - Local VLM (Qwen2.5-VL) for scene analysis
+  - NLP Command Parser (Qwen2.5-3B-Instruct) for natural language understanding
   - RoboMP2 navigation policies
   
 - **Robot Server**: Jetson Orin Nano (192.168.1.166)
@@ -91,6 +92,44 @@ ros2 launch robot_vila_system client_system.launch.py gui:=false
 ros2 launch robot_vila_system client_system.launch.py vlm_enabled:=false
 ```
 
+## 🧠 Natural Language Command Parser
+
+The system includes an advanced NLP command parser using Qwen2.5-3B-Instruct for flexible, natural language robot control.
+
+### Features
+- **Flexible Commands**: "move forward 1m", "go ahead 1 meter", "advance 1 meter" all work
+- **Fast**: ~50-150ms inference on GPU
+- **Parameter Extraction**: Automatically extracts distance, angle, speed from natural language
+- **Vision Integration**: Determines when VLM processing is needed
+
+### Example Commands
+
+**Simple Movement (No Vision):**
+```
+"move forward 1 meter"
+"turn left 90 degrees"
+"back up 0.5 meters"
+"rotate right 45 deg"
+"strafe left 1m"
+```
+
+**Complex Commands (Vision Required):**
+```
+"move to 1m in front of the refrigerator"
+"turn slowly clockwise until you see the door"
+"go to the kitchen"
+"approach the table"
+```
+
+### Testing NLP Parser
+
+```bash
+cd ~/Robot_LLM
+python3 test_nlp_parser.py
+```
+
+See [NLP_PARSER.md](NLP_PARSER.md) for detailed documentation.
+
 ## 📁 Project Structure
 
 ```
@@ -112,6 +151,7 @@ Robot_LLM/
 │           ├── gui_components.py            # GUI widgets
 │           ├── gui_config.py                # GUI configuration
 │           ├── gui_utils.py                 # GUI utilities
+│           ├── nlp_command_parser.py        # NLP command parser
 │           └── robomp2_components.py        # RoboMP2 integration
 │
 ├── hf_cache/                    # Hugging Face model cache

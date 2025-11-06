@@ -40,6 +40,9 @@ transformers.logging.set_verbosity_error()  # Suppress generation warnings
 # Import RoboMP2 components
 from .robomp2_components import GoalConditionedMultimodalPerceptor, RetrievalAugmentedMultimodalPlanner
 
+# Import NLP command parser
+from .nlp_command_parser import NLPCommandParser
+
 # Import configuration
 from .gui_config import GUIConfig
 
@@ -117,6 +120,11 @@ class RoboMP2NavigationNode(Node):
         self.processor = None
         self.tokenizer = None
         self.model_loaded = False
+
+        # NLP command parser (initialized later)
+        self.nlp_parser = None
+        self.nlp_parser_enabled = GUIConfig.ENABLE_NLP_PARSER
+        self.nlp_model_name = GUIConfig.DEFAULT_NLP_MODEL
         
         # Data storage with thread safety
         self.current_camera_image = None
@@ -146,10 +154,13 @@ class RoboMP2NavigationNode(Node):
         
         # Initialize RoboMP2 components
         self._initialize_robomp2_components()
-        
+
+        # Initialize NLP command parser
+        self._initialize_nlp_parser()
+
         # Start model loading in background
         self._start_model_loading()
-        
+
         self.get_logger().info("🤖 RoboMP2 Navigation Node initialized with GCMP and RAMP")
 
     def _setup_ros2_components(self):
@@ -267,7 +278,41 @@ class RoboMP2NavigationNode(Node):
             self.get_logger().error(f"❌ Failed to initialize RoboMP2 components: {e}")
             self.get_logger().error("❌ RoboMP2 is required for navigation - cannot proceed")
             raise RuntimeError(f"RoboMP2 initialization failed: {e}")
-    
+
+    def _initialize_nlp_parser(self):
+        """Initialize NLP command parser for natural language understanding"""
+        if not self.nlp_parser_enabled:
+            self.get_logger().info("🔇 NLP command parser disabled via configuration")
+            return
+
+        try:
+            self.get_logger().info(f"🔄 Initializing NLP command parser: {self.nlp_model_name}")
+
+            # Create NLP parser instance
+            self.nlp_parser = NLPCommandParser(
+                model_name=self.nlp_model_name,
+                device=self.device,
+                logger=self.get_logger()
+            )
+
+            # Load model in background thread to avoid blocking
+            def load_nlp_model():
+                try:
+                    self.nlp_parser.load_model()
+                    self.get_logger().info("✅ NLP command parser ready for natural language understanding")
+                except Exception as e:
+                    self.get_logger().error(f"❌ Failed to load NLP parser model: {e}")
+                    self.get_logger().warn("   └── Falling back to keyword-based command parsing")
+                    self.nlp_parser = None
+
+            nlp_loading_thread = threading.Thread(target=load_nlp_model, daemon=True)
+            nlp_loading_thread.start()
+
+        except Exception as e:
+            self.get_logger().error(f"❌ Failed to initialize NLP parser: {e}")
+            self.get_logger().warn("   └── Continuing with keyword-based command parsing")
+            self.nlp_parser = None
+
     def _start_model_loading(self):
         """Start model loading in background thread"""
         def load_model():
@@ -800,7 +845,35 @@ class RoboMP2NavigationNode(Node):
         start_time = time.time()
         inference_timeout = 2.0  # 2-second timeout for ultra-fast response
 
-        # Check if this is a direct command (e.g., "move forward", "turn left")
+        # NEW: Try NLP parser first for natural language understanding (if enabled and loaded)
+        if self.nlp_parser is not None and hasattr(self.nlp_parser, 'model_loaded') and self.nlp_parser.model_loaded:
+            try:
+                self.get_logger().info(f"🧠 Using NLP parser for: '{prompt}'")
+                parsed_cmd = self.nlp_parser.parse_command(prompt)
+
+                # If command doesn't need vision, execute directly
+                if not parsed_cmd.needs_vision:
+                    self.get_logger().info(f"   └── NLP parsed to {parsed_cmd.action} (no vision needed)")
+                    return {
+                        'action': parsed_cmd.action,
+                        'confidence': parsed_cmd.confidence,
+                        'reasoning': f'NLP parsed: {prompt}',
+                        'vlm_response': f'NLP command: {parsed_cmd.action}',
+                        'is_informational': False,
+                        'parameters': parsed_cmd.parameters
+                    }
+                else:
+                    # Command needs vision - continue to VLM processing below
+                    self.get_logger().info(f"   └── NLP parsed to {parsed_cmd.action} (needs vision: {parsed_cmd.parameters.get('target', 'N/A')})")
+                    # Store parsed command for later use with vision
+                    nlp_action = parsed_cmd.action
+                    nlp_params = parsed_cmd.parameters
+
+            except Exception as e:
+                self.get_logger().warn(f"⚠️ NLP parsing failed, falling back to keyword matching: {e}")
+                # Continue with fallback methods below
+
+        # FALLBACK: Check if this is a direct command (e.g., "move forward", "turn left")
         is_direct, direct_command, params = self._is_direct_command(prompt)
         if is_direct:
             self.get_logger().info(f"🎮 Detected DIRECT COMMAND: {prompt} → {direct_command}")
