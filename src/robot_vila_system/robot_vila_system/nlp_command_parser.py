@@ -193,6 +193,12 @@ class NLPCommandParser:
 
 Available actions: move_forward, move_backward, turn_left, turn_right, strafe_left, strafe_right, navigate_to, stop, emergency_stop
 
+Direction conventions:
+- CW = clockwise = turn_right
+- CCW = counterclockwise = turn_left
+- left = turn_left
+- right = turn_right
+
 Output JSON schema:
 {{
   "action": "<action_type>",
@@ -221,6 +227,12 @@ Output: {{"action": "turn_left", "parameters": {{"angle": 90}}, "needs_vision": 
 
 User: "rotate right 45 deg"
 Output: {{"action": "turn_right", "parameters": {{"angle": 45}}, "needs_vision": false}}
+
+User: "turn CW 180 deg"
+Output: {{"action": "turn_right", "parameters": {{"angle": 180}}, "needs_vision": false}}
+
+User: "rotate CCW 90 degrees"
+Output: {{"action": "turn_left", "parameters": {{"angle": 90}}, "needs_vision": false}}
 
 User: "turn slowly clockwise until you see the door"
 Output: {{"action": "turn_right", "parameters": {{"speed": 0.2, "condition": "see_door"}}, "needs_vision": true}}
