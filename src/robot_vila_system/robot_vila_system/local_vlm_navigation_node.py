@@ -300,6 +300,9 @@ class RoboMP2NavigationNode(Node):
                 try:
                     self.nlp_parser.load_model()
                     self.get_logger().info("✅ NLP command parser ready for natural language understanding")
+                    self.get_logger().info("   └── Now supports: CW/CCW, clockwise/counterclockwise, and flexible phrasing")
+                    # Publish status update
+                    self._publish_status("nlp_ready", "NLP command parser ready", model_name=self.nlp_model_name)
                 except Exception as e:
                     self.get_logger().error(f"❌ Failed to load NLP parser model: {e}")
                     self.get_logger().warn("   └── Falling back to keyword-based command parsing")
