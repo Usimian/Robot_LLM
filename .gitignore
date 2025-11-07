@@ -121,6 +121,9 @@ devel/
 models/
 checkpoints/
 
+# Exception: Track Gazebo simulation models
+!gazebo_sim/robot_sim/models/
+
 # Generated files
 *.pyc
 *.pyo

@@ -843,7 +843,8 @@ class RoboMP2NavigationNode(Node):
     def _run_vlm_navigation_inference(self, image: Optional[Image.Image], prompt: str, sensor_data: Dict[str, float], lidar_data: Optional[Dict[str, Any]] = None, raw_lidar_msg: Optional[object] = None) -> Dict[str, Any]:
         """Run RoboMP2-enhanced VLM inference for navigation decisions"""
         start_time = time.time()
-        inference_timeout = 2.0  # 2-second timeout for ultra-fast response
+        # Timeout depends on query type - informational queries can take longer
+        inference_timeout = 10.0  # Allow more time for VLM processing
 
         # NEW: Try NLP parser first for natural language understanding (if enabled and loaded)
         if self.nlp_parser is not None and hasattr(self.nlp_parser, 'model_loaded') and self.nlp_parser.model_loaded:
