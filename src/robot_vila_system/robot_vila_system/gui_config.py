@@ -57,7 +57,7 @@ class GUIConfig:
 
     # Model settings
     DEFAULT_VLM_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
-    DEFAULT_NLP_MODEL = "Qwen/Qwen2.5-3B-Instruct"  # Lightweight text-only model for command parsing
+    DEFAULT_NLP_MODEL = "Qwen/Qwen3-4B-Instruct-2507"  # Lightweight text-only model for command parsing (Qwen3 compatible with newer transformers)
     ENABLE_NLP_PARSER = True  # Enable natural language command parsing
 
     # QoS settings

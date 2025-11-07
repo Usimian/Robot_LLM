@@ -98,13 +98,13 @@ class NLPCommandParser:
 
             # Load model with optimization
             if self.device == "cuda":
-                # Use device_map for CUDA (automatically handles placement)
+                # Load model with float16 directly to CUDA
+                # Qwen3 models are compatible with modern transformers/accelerate
                 self.model = AutoModelForCausalLM.from_pretrained(
                     self.model_name,
                     torch_dtype=torch.float16,
-                    device_map="auto",  # Let transformers handle device placement
                     trust_remote_code=True,
-                    low_cpu_mem_usage=True
+                    device_map="cuda"
                 )
             else:
                 # For CPU, load normally
